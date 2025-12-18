@@ -219,7 +219,7 @@ ggplot(karta, aes(fill = klass)) +
 Karta över demografiska statistikområden.
 ```r
 # Ladda förberedda DeSO-områden (anpassade för havet)
-deso <- load_prepared_map("goteborg/deso")
+deso <- load_prepared_map("goteborg/deso_goteborg")
 
 # Eller hämta direkt från SCB (originalgränser med vatten)
 deso <- load_deso_from_scb(municipality_codes = "1480", year = 2025)

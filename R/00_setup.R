@@ -5,22 +5,56 @@
 # Detta script laddar alla funktioner från gothenburg_maps-projektet.
 #
 # Användning:
+#   # Från gothenburg_maps-projektet:
 #   source("R/00_setup.R")
+#
+#   # Från andra projekt (med biblioteksklon):
+#   source("~/Documents/R-bibliotek/gothenburg_maps/R/00_setup.R")
 #
 # =============================================================================
 
+# Hitta var detta script ligger och navigera till projektets root
+script_path <- sys.frame(1)$ofile
+
+if (is.null(script_path)) {
+  # Om script_path är NULL (kan hända i vissa miljöer), försök alternativ metod
+  script_path <- commandArgs(trailingOnly = FALSE)
+  file_arg <- "--file="
+  script_path <- sub(file_arg, "", script_path[grep(file_arg, script_path)])
+}
+
+# Om vi fortfarande inte hittar sökvägen, anta att vi kör från projekt-root
+if (length(script_path) == 0 || is.null(script_path) || script_path == "") {
+  project_root <- getwd()
+} else {
+  script_dir <- dirname(script_path)
+  project_root <- dirname(script_dir)  # Gå upp från R/ till projektets rot
+}
+
 # Kontrollera att vi kan hitta filerna
-if (!file.exists("R/classify.R")) {
+classify_path <- file.path(project_root, "R", "classify.R")
+if (!file.exists(classify_path)) {
   stop(
     "Kan inte hitta R-funktionerna.\n",
-    "Kör detta script från projektets root-mapp (där .Rproj-filen ligger)."
+    "Sökte i: ", project_root, "\n",
+    "Kontrollera att sökvägen till gothenburg_maps är korrekt."
   )
 }
 
 cat("\n")
 cat("=============================================================================\n")
 cat("  GOTHENBURG_MAPS - Laddar funktioner...\n")
-cat("=============================================================================\n\n")
+cat("=============================================================================\n")
+cat("Projekt-root: ", project_root, "\n\n")
+
+# Spara nuvarande working directory
+old_wd <- getwd()
+
+# Byt till projektets root för att ladda filer
+setwd(project_root)
+
+# Se till att återställa working directory när vi är klara
+on.exit(setwd(old_wd), add = TRUE)
 
 # Lista över filer att ladda (i rätt ordning)
 files_to_load <- c(
@@ -52,6 +86,8 @@ cat("===========================================================================
 # Visa huvudfunktioner
 cat("Huvudfunktioner:\n")
 cat("  - load_prepared_map()        Ladda kartlager\n")
+cat("  - load_deso_from_scb()       Ladda DeSO från SCB\n")
+cat("  - load_regso_from_scb()      Ladda RegSO från SCB\n")
 cat("  - join_stat_to_map()         Koppla statistik till karta\n")
 cat("  - create_breaks()            Skapa klassgränser\n")
 cat("  - create_labels()            Skapa labels\n")
@@ -79,19 +115,24 @@ if (length(missing_packages) > 0) {
 }
 
 # Visa tillgängliga kartlager
-if (dir.exists("input/prepared_maps")) {
-  goteborg_dir <- "input/prepared_maps/goteborg"
-  sverige_dir <- "input/prepared_maps/sverige"
+prepared_maps_dir <- file.path(project_root, "input", "prepared_maps")
+if (dir.exists(prepared_maps_dir)) {
+  goteborg_dir <- file.path(prepared_maps_dir, "goteborg")
+  sverige_dir <- file.path(prepared_maps_dir, "sverige")
   
   goteborg_maps <- character(0)
   sverige_maps <- character(0)
   
   if (dir.exists(goteborg_dir)) {
     goteborg_maps <- list.files(goteborg_dir, pattern = "\\.rds$")
+    # Filtrera bort backup-mappen
+    goteborg_maps <- goteborg_maps[!grepl("backup", goteborg_maps)]
   }
   
   if (dir.exists(sverige_dir)) {
     sverige_maps <- list.files(sverige_dir, pattern = "\\.rds$")
+    # Filtrera bort backup-mappen
+    sverige_maps <- sverige_maps[!grepl("backup", sverige_maps)]
   }
   
   if (length(goteborg_maps) > 0 || length(sverige_maps) > 0) {
@@ -116,4 +157,5 @@ if (dir.exists("input/prepared_maps")) {
   }
 }
 
-cat("Redo att skapa kartor! 🗺️\n\n")
+cat("Redo att skapa kartor! 🗺️\n")
+cat("Working directory återställd till: ", getwd(), "\n\n")
