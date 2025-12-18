@@ -1,0 +1,725 @@
+# 📖 Geodata - Ladda och hantera kartlager
+
+Funktioner för att ladda förberedda kartlager, DeSO/RegSO från SCB och koppla statistik.
+
+---
+
+## Innehållsförteckning
+
+### Förberedda kartlager
+1. [load_prepared_map()](#load_prepared_map) - Ladda kartlager
+2. [load_water_layer()](#load_water_layer) - Ladda vattenlager
+3. [list_prepared_maps()](#list_prepared_maps) - Lista tillgängliga kartlager
+
+### DeSO och RegSO (SCB 2025)
+4. [load_deso_from_scb()](#load_deso_from_scb) - Ladda DeSO 2025
+5. [load_regso_from_scb()](#load_regso_from_scb) - Ladda RegSO 2025
+6. [load_deso_regso_koppling()](#load_deso_regso_koppling) - Ladda kopplingstabell
+
+### Generell geodata
+7. [load_geo_layer()](#load_geo_layer) - Ladda egna shapefiles/GeoJSON
+
+### Statistik och spatial analys
+8. [join_stat_to_map()](#join_stat_to_map) - Koppla statistik till karta
+9. [join_points_to_areas()](#join_points_to_areas) - Koppla punkter till områden
+
+---
+
+## load_prepared_map() {#load_prepared_map}
+
+### Beskrivning
+
+Läser in ett förberett kartlager i rds-format. Snabbare än att läsa shapefiler varje gång.
+
+### Syntax
+
+```r
+load_prepared_map(map_name, data_dir = "input/prepared_maps")
+```
+
+### Parametrar
+
+- **map_name** (character): Namn på kartlagret med mapp (utan .rds-suffix)
+  - Format: `"mapp/filnamn"`
+  - Exempel: `"goteborg/primaromraden"`, `"sverige/kommuner"`
+- **data_dir** (character): Mapp där förberedda kartlager finns (default: `"input/prepared_maps"`)
+
+### Returnerar
+
+sf-objekt med kartgeometrier
+
+### Tillgängliga kartlager
+
+#### Göteborg
+- `"goteborg/primaromraden"` - Primärområden
+- `"goteborg/stadsdelar"` - Stadsdelar
+- `"goteborg/basomraden"` - Basområden
+- `"goteborg/kommungrans"` - Kommungräns
+- `"goteborg/deso_goteborg"` - **DeSO 2025 för Göteborg** (med RegSO-info)
+- `"goteborg/regso_goteborg"` - **RegSO 2025 för Göteborg**
+
+#### Sverige
+- `"sverige/kommuner"` - Sveriges kommuner
+- `"sverige/lan"` - Sveriges län
+- `"sverige/regioner"` - Sveriges regioner
+- `"sverige/deso_gr"` - **DeSO 2025 för Göteborgsregionen** (med RegSO-info)
+- `"sverige/regso_gr"` - **RegSO 2025 för Göteborgsregionen**
+
+### Exempel
+
+```r
+# Göteborg - traditionella lager
+primaromraden <- load_prepared_map("goteborg/primaromraden")
+stadsdelar <- load_prepared_map("goteborg/stadsdelar")
+
+# Göteborg - DeSO/RegSO
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+# → ~700 DeSO-områden med RegSO-info
+
+regso_gbg <- load_prepared_map("goteborg/regso_goteborg")
+# → ~90 RegSO-områden
+
+# Sverige
+kommuner <- load_prepared_map("sverige/kommuner")
+deso_gr <- load_prepared_map("sverige/deso_gr")
+# → ~2400 DeSO-områden i Göteborgsregionens 13 kommuner
+
+# Enkel preview
+plot(st_geometry(deso_gbg))
+```
+
+### DeSO-kolumner
+
+När du laddar DeSO-lager får du följande kolumner:
+
+```r
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+names(deso_gbg)
+# → "desokod", "regsokod", "kommunkod", "kommunnamn",
+#   "RegSO_2025", "RegSOkod_2025", "geometry"
+```
+
+- **desokod**: DeSO-områdets kod (t.ex. "1480C1010")
+- **regsokod**: RegSO-kod från SCB
+- **kommunkod**: Kommunkod (t.ex. "1480" för Göteborg)
+- **kommunnamn**: Kommunnamn
+- **RegSO_2025**: RegSO-områdets namn (från kopplingstabell)
+- **RegSOkod_2025**: RegSO-kod (från kopplingstabell)
+- **geometry**: Geometri
+
+### Best Practices
+
+```r
+# Spara ofta använda lager i variabler
+goteborg_primaromraden <- load_prepared_map("goteborg/primaromraden")
+goteborg_deso <- load_prepared_map("goteborg/deso_goteborg")
+
+# Filtrera DeSO till specifikt område
+deso_centrum <- goteborg_deso |>
+  filter(str_detect(RegSO_2025, "Centrum"))
+
+# Aggregera DeSO till RegSO-nivå
+regso_aggregerad <- goteborg_deso |>
+  st_drop_geometry() |>
+  group_by(RegSO_2025, RegSOkod_2025) |>
+  summarise(antal_deso = n())
+```
+
+---
+
+## load_water_layer() {#load_water_layer}
+
+### Beskrivning
+
+Läser in förberedda vattenlager (älvar, sjöar, hav) för visualisering.
+
+### Syntax
+
+```r
+load_water_layer(water_name, data_dir = "input/prepared_maps")
+```
+
+### Parametrar
+
+- **water_name** (character): Namn på vattenlagret med mapp (utan .rds-suffix)
+- **data_dir** (character): Mapp där förberedda vattenlager finns
+
+### Returnerar
+
+sf-objekt med vattengeometrier, eller NULL om fil saknas
+
+### Exempel
+
+```r
+# Ladda älv och hav
+alv <- load_water_layer("goteborg/alv_goteborg")
+hav <- load_water_layer("goteborg/hav_goteborg")
+
+# Kombinera med DeSO-karta
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+
+ggplot() +
+  geom_sf(data = deso_gbg, fill = "lightgray") +
+  geom_sf(data = alv, fill = "#b3d9ff", color = NA) +
+  theme_void()
+```
+
+---
+
+## list_prepared_maps() {#list_prepared_maps}
+
+### Beskrivning
+
+Visar information om alla förberedda kartlager i en tabell.
+
+### Syntax
+
+```r
+list_prepared_maps(data_dir = "input/prepared_maps", pattern = "\\.rds$")
+```
+
+### Returnerar
+
+Data.frame med information om tillgängliga kartlager
+
+### Exempel
+
+```r
+# Lista alla
+kartlager <- list_prepared_maps()
+View(kartlager)
+
+# Filtrera till DeSO/RegSO
+kartlager |> filter(str_detect(map_name, "deso|regso"))
+```
+
+---
+
+## load_deso_from_scb() {#load_deso_from_scb}
+
+### Beskrivning
+
+Hämtar Demografiska statistikområden (DeSO 2025) direkt från SCB:s WFS-tjänst.
+
+**DeSO** är SCB:s standardindelning för statistikredovisning på lokal nivå. Områdena är relativt likvärdiga vad gäller befolkningsstorlek (~1000-2000 invånare).
+
+**DeSO 2025** är den nya versionen som gäller från 2025-01-01. All statistik som SCB publicerar under 2025 använder denna indelning.
+
+### Syntax
+
+```r
+load_deso_from_scb(crs = 3006, simplify = FALSE, tolerance = 100)
+```
+
+### Parametrar
+
+- **crs** (numeric): Målprojektion (default: 3006 = SWEREF99 TM)
+- **simplify** (logical): Förenkla geometri för snabbare rendering? (default: FALSE)
+- **tolerance** (numeric): Tolerans för simplify i meter (default: 100)
+
+### Returnerar
+
+sf-objekt med ~5900 DeSO 2025-områden för hela Sverige
+
+### Kolumner
+
+- **desokod**: DeSO-kod (8 tecken, t.ex. "1480C1010")
+- **regsokod**: RegSO-kod
+- **kommunkod**: Kommunkod (4 tecken)
+- **kommunnamn**: Kommunnamn
+- **lanskod**: Länskod
+- **geometry**: Polygongeometri
+
+### Exempel
+
+```r
+# Ladda alla DeSO för Sverige
+deso_alla <- load_deso_from_scb()
+# → ~5900 områden
+
+# Filtrera till Göteborg
+deso_gbg <- deso_alla |>
+  filter(kommunkod == "1480")
+# → ~700 områden
+
+# Filtrera till Göteborgsregionen (13 kommuner)
+gr_kommuner <- c("1440", "1489", "1480", "1401", "1384", 
+                 "1482", "1441", "1462", "1481", "1402", 
+                 "1415", "1419", "1407")
+
+deso_gr <- deso_alla |>
+  filter(kommunkod %in% gr_kommuner)
+# → ~2400 områden
+
+# Med förenkling (snabbare rendering)
+deso_enkel <- load_deso_from_scb(simplify = TRUE, tolerance = 100)
+```
+
+### När använda DeSO?
+
+**Fördelar:**
+- **Finmaskigt**: Detaljerad geografisk upplösning (~1000-2000 inv/område)
+- **Jämförbart**: Likvärdiga områden över hela Sverige
+- **Standardiserat**: SCB:s officiella redovisningsnivå
+- **Tidsserie**: Samma indelning över tid (inom varje version)
+
+**Använd DeSO för:**
+- Detaljerade lokala analyser
+- Demografisk statistik (befolkning, ålder, inkomst)
+- Jämförelser mellan områden
+- När SCB-statistik ska visualiseras
+
+**Använd RegSO istället för:**
+- Översiktskartor (grövre indelning)
+- När DeSO blir för detaljerat
+- Mindre dataset som inte behöver finmaskighet
+
+### VIKTIGT om versioner
+
+**DeSO 2025 vs DeSO 2018:**
+- **Statistik 2025→**: Använd DeSO 2025
+- **Statistik före 2025**: Använd DeSO 2018 (separat funktion)
+- **Jämför inte** mellan versionerna - olika områden!
+
+```r
+# Rätt: Statistik från 2025
+befolkning_2025 <- read_csv("befolkning_2025.csv")  # På DeSO 2025
+deso_2025 <- load_deso_from_scb()
+karta <- join_stat_to_map(deso_2025, befolkning_2025, by = "desokod")
+
+# Fel: Statistik från 2024 på DeSO 2025
+befolkning_2024 <- read_csv("befolkning_2024.csv")  # På DeSO 2018!
+deso_2025 <- load_deso_from_scb()  # Kommer inte matcha!
+```
+
+---
+
+## load_regso_from_scb() {#load_regso_from_scb}
+
+### Beskrivning
+
+Hämtar Regionala statistikområden (RegSO 2025) direkt från SCB:s WFS-tjänst.
+
+**RegSO** är en grövre indelning än DeSO (~5000-6000 invånare per område). Använd RegSO när DeSO blir för detaljerat.
+
+### Syntax
+
+```r
+load_regso_from_scb(crs = 3006, simplify = FALSE, tolerance = 100)
+```
+
+### Parametrar
+
+Samma som `load_deso_from_scb()`
+
+### Returnerar
+
+sf-objekt med ~1300 RegSO 2025-områden för hela Sverige
+
+### Exempel
+
+```r
+# Ladda alla RegSO
+regso_alla <- load_regso_from_scb()
+# → ~1300 områden
+
+# Filtrera till Göteborg
+regso_gbg <- regso_alla |>
+  filter(kommunkod == "1480")
+# → ~90 områden
+
+# Jämför DeSO vs RegSO
+deso_gbg <- load_deso_from_scb() |> filter(kommunkod == "1480")
+regso_gbg <- load_regso_from_scb() |> filter(kommunkod == "1480")
+
+nrow(deso_gbg)   # ~700 DeSO
+nrow(regso_gbg)  # ~90 RegSO
+```
+
+### DeSO vs RegSO - När använda vad?
+
+| Aspekt | DeSO | RegSO |
+|--------|------|-------|
+| **Antal områden (Göteborg)** | ~700 | ~90 |
+| **Invånare per område** | ~1000-2000 | ~5000-6000 |
+| **Användning** | Detaljerade analyser | Översiktskartor |
+| **Visualisering** | Mer detaljer, långsammare | Färre detaljer, snabbare |
+| **Statistik** | Finmaskig data | Aggregerad data |
+
+**Tumregel:**
+- **A4-karta av Göteborg**: Använd RegSO (90 områden)
+- **Digital zoombar karta**: Använd DeSO (700 områden)
+- **Sverigekarta**: Använd RegSO (~1300 områden)
+
+---
+
+## load_deso_regso_koppling() {#load_deso_regso_koppling}
+
+### Beskrivning
+
+Hämtar kopplingstabellen mellan DeSO 2025 och RegSO 2025 från SCB. Används för att koppla RegSO-information till DeSO-områden.
+
+### Syntax
+
+```r
+load_deso_regso_koppling()
+```
+
+### Returnerar
+
+Data.frame med ~5900 rader (en per DeSO) och kolumnerna:
+- **Kommun**: Kommunkod
+- **Kommunnamn**: Kommunnamn
+- **DeSO_2025**: DeSO-kod
+- **RegSO_2025**: RegSO-namn
+- **RegSOkod_2025**: RegSO-kod
+
+### Exempel
+
+```r
+# Ladda kopplingstabell
+koppling <- load_deso_regso_koppling()
+
+# Ladda DeSO
+deso <- load_deso_from_scb() |> filter(kommunkod == "1480")
+
+# Koppla RegSO-namn till DeSO
+deso_med_regso <- deso |>
+  left_join(koppling, by = c("desokod" = "DeSO_2025"))
+
+# Nu kan vi färglägga DeSO efter RegSO
+ggplot(deso_med_regso, aes(fill = RegSO_2025)) +
+  geom_sf() +
+  labs(title = "DeSO-områden färgade efter RegSO")
+```
+
+### OBS: Förberedda lager har redan koppling!
+
+```r
+# Behöver INTE ladda kopplingstabell manuellt:
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+# → Har redan RegSO_2025 och RegSOkod_2025 kolumner!
+
+names(deso_gbg)
+# → "desokod", "regsokod", "kommunkod", "kommunnamn",
+#   "RegSO_2025", "RegSOkod_2025", "geometry"
+```
+
+Använd bara `load_deso_regso_koppling()` om du laddar DeSO direkt från SCB med `load_deso_from_scb()`.
+
+---
+
+## load_geo_layer() {#load_geo_layer}
+
+### Beskrivning
+
+Generell funktion för att ladda geodata från olika format (Shapefile, GeoJSON, GeoPackage, KML). Använd när du har egna geografiska filer.
+
+### Syntax
+
+```r
+load_geo_layer(
+  path,
+  layer = NULL,
+  crs = 3006,
+  simplify = FALSE,
+  tolerance = 100,
+  clip = NULL,
+  validate = TRUE
+)
+```
+
+### Parametrar
+
+- **path** (character): Sökväg till fil (.shp, .geojson, .gpkg, .kml)
+- **layer** (character): Layer-namn (endast för GeoPackage med flera lager)
+- **crs** (numeric): Målprojektion (default: 3006 = SWEREF99 TM)
+- **simplify** (logical): Förenkla geometri? (default: FALSE)
+- **tolerance** (numeric): Tolerans för simplify i meter (default: 100)
+- **clip** (sf): sf-objekt att klippa till (t.ex. kommungräns)
+- **validate** (logical): Validera geometri? (default: TRUE)
+
+### Returnerar
+
+sf-objekt i angiven projektion
+
+### Exempel
+
+```r
+# Grundläggande - ladda shapefile
+byggnader <- load_geo_layer("data/byggnader.shp")
+
+# Ladda GeoJSON
+parker <- load_geo_layer("data/parker.geojson")
+
+# Ladda GeoPackage (specifikt lager)
+vatten <- load_geo_layer("data/geodata.gpkg", layer = "vatten")
+
+# Med förenkling (snabbare rendering)
+kommuner <- load_geo_layer(
+  "data/kommuner.shp",
+  simplify = TRUE,
+  tolerance = 100
+)
+
+# Klipp till kommungräns
+goteborg_grans <- load_prepared_map("goteborg/kommungrans")
+detaljer <- load_geo_layer(
+  "data/detaljer.shp",
+  clip = goteborg_grans
+)
+
+# Annan projektion (t.ex. WGS84 för webbkartor)
+world <- load_geo_layer("data/world.geojson", crs = 4326)
+```
+
+### Stödda format
+
+- **.shp** - Shapefile (klassiskt GIS-format)
+- **.geojson** - GeoJSON (webbanvänt, lätt att dela)
+- **.gpkg** - GeoPackage (modernare än Shapefile)
+- **.kml** - KML (från Google Earth)
+
+### Best Practices
+
+```r
+# 1. Alltid kontrollera CRS
+data <- load_geo_layer("data/myfile.shp")
+st_crs(data)  # Kontrollera projektion
+
+# 2. Förenkla stora filer
+# Gör rendering mycket snabbare
+data <- load_geo_layer("data/detaljerad.shp", simplify = TRUE)
+
+# 3. Klipp till relevant område
+goteborg <- load_prepared_map("goteborg/kommungrans")
+data <- load_geo_layer("data/sverige.shp", clip = goteborg)
+```
+
+---
+
+## join_stat_to_map() {#join_stat_to_map}
+
+### Beskrivning
+
+Kopplar tabelldatakällor (CSV, Excel, dataframe) till kartgeometrier. Säkerställer matchning mellan data och geografi.
+
+### Syntax
+
+```r
+join_stat_to_map(
+  map_data,
+  stat_data,
+  by = NULL,
+  by_map = NULL,
+  by_stat = NULL
+)
+```
+
+### Parametrar
+
+- **map_data** (sf): sf-objekt med kartgeometrier
+- **stat_data** (data.frame): Statistikdata
+- **by** (character): Kolumnnamn att matcha på (om samma i båda)
+- **by_map** (character): Kolumnnamn i map_data (om olika)
+- **by_stat** (character): Kolumnnamn i stat_data (om olika)
+
+### Returnerar
+
+sf-objekt med både geometri och statistik
+
+### Exempel
+
+#### Enkel matchning (samma kolumnnamn)
+
+```r
+# Ladda data
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+befolkning <- read_csv("data/befolkning_deso.csv")
+
+# Koppla
+karta <- join_stat_to_map(
+  map_data = deso_gbg,
+  stat_data = befolkning,
+  by = "desokod"
+)
+
+# Nu har karta både geometri och statistik
+names(karta)
+# → "desokod", "kommunnamn", "befolkning", "inkomst", "geometry"
+```
+
+#### Olika kolumnnamn
+
+```r
+# Kommundata med olika kolumnnamn
+kommuner <- load_prepared_map("sverige/kommuner")
+scb_data <- read_csv("data/scb_befolkning.csv")
+
+karta <- join_stat_to_map(
+  map_data = kommuner,
+  stat_data = scb_data,
+  by_map = "kommun_kod",  # Kolumn i kommuner
+  by_stat = "kod"          # Kolumn i scb_data
+)
+```
+
+#### DeSO-exempel
+
+```r
+# Ladda DeSO
+deso_gr <- load_prepared_map("sverige/deso_gr")
+
+# SCB-statistik på DeSO-nivå
+scb_inkomst <- read_csv("data/inkomst_deso_2025.csv")
+# Kolumner: desokod, medelinkomst, medianinkomst
+
+# Koppla
+karta <- join_stat_to_map(deso_gr, scb_inkomst, by = "desokod")
+
+# Visualisera
+ggplot(karta, aes(fill = medelinkomst)) +
+  geom_sf(color = "white", linewidth = 0.05) +
+  scale_fill_gbg_sequential("blue")
+```
+
+### Matchningsstatus
+
+Funktionen visar automatiskt matchningsstatus:
+
+```r
+karta <- join_stat_to_map(deso_gbg, befolkning, by = "desokod")
+# Matchar på kolumn: 'desokod' = 'desokod'
+#   Formaterade matchningskolumner till text
+# ✓ Perfekt matchning: 700/700 områden (100%)
+#   ✓ 700 områden efter merge
+```
+
+### Best Practices
+
+```r
+# 1. Kontrollera kolumnnamn först
+names(deso_gbg)
+names(befolkning)
+
+# 2. Inspektera matchning
+karta <- join_stat_to_map(deso_gbg, befolkning, by = "desokod")
+sum(is.na(karta$befolkning))  # Ska vara 0
+
+# 3. Hantera dålig matchning
+# Problem: olika formattering
+befolkning <- befolkning |>
+  mutate(desokod = str_pad(desokod, width = 8, pad = "0"))
+```
+
+---
+
+## join_points_to_areas() {#join_points_to_areas}
+
+### Beskrivning
+
+Spatial join - kopplar punkter (t.ex. skolor, affärer, hållplatser) till polygon-områden och räknar antal per område.
+
+### Syntax
+
+```r
+join_points_to_areas(polygons, points, count_column = "n_points")
+```
+
+### Parametrar
+
+- **polygons** (sf): sf-objekt med områden (polygon)
+- **points** (sf): sf-objekt med punkter
+- **count_column** (character): Namn på ny kolumn för antal (default: "n_points")
+
+### Returnerar
+
+sf-objekt (polygons) med ny kolumn för antal punkter
+
+### Exempel
+
+```r
+# Räkna skolor per DeSO-område
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+skolor <- st_read("data/skolor.shp")
+
+deso_skolor <- join_points_to_areas(
+  polygons = deso_gbg,
+  points = skolor,
+  count_column = "antal_skolor"
+)
+
+# Visualisera
+ggplot(deso_skolor, aes(fill = antal_skolor)) +
+  geom_sf(color = "white", linewidth = 0.05) +
+  scale_fill_gbg_sequential("green") +
+  labs(title = "Antal skolor per DeSO-område")
+
+# Räkna hållplatser per RegSO
+regso_gbg <- load_prepared_map("goteborg/regso_goteborg")
+hallplatser <- st_read("data/hallplatser.shp")
+
+regso_hallplatser <- join_points_to_areas(
+  regso_gbg,
+  hallplatser,
+  "antal_hallplatser"
+)
+```
+
+### Användningsområden
+
+- Skolor per område
+- Affärer per stadsdel
+- Hållplatser per DeSO
+- Brott per område
+- Restauranger per område
+
+---
+
+## Snabbreferens
+
+### Förberedda lager
+
+```r
+# Göteborg
+load_prepared_map("goteborg/primaromraden")
+load_prepared_map("goteborg/stadsdelar")
+load_prepared_map("goteborg/deso_goteborg")    # DeSO 2025
+load_prepared_map("goteborg/regso_goteborg")   # RegSO 2025
+
+# Sverige/GR
+load_prepared_map("sverige/kommuner")
+load_prepared_map("sverige/deso_gr")           # DeSO 2025 GR
+load_prepared_map("sverige/regso_gr")          # RegSO 2025 GR
+```
+
+### DeSO/RegSO från SCB
+
+```r
+# Ladda direkt från SCB (för uppdateringar)
+deso <- load_deso_from_scb()
+regso <- load_regso_from_scb()
+koppling <- load_deso_regso_koppling()
+
+# Filtrera
+deso_gbg <- deso |> filter(kommunkod == "1480")
+```
+
+### Koppla data
+
+```r
+# Samma kolumnnamn
+karta <- join_stat_to_map(map, data, by = "kod")
+
+# Olika kolumnnamn
+karta <- join_stat_to_map(map, data, by_map = "omrade", by_stat = "kod")
+
+# Räkna punkter
+karta <- join_points_to_areas(omraden, punkter, "antal")
+```
+
+---
+
+**Version:** 2.0  
+**Uppdaterad:** 2025-12-16  
+**Nytt:** DeSO 2025, RegSO 2025, load_geo_layer()

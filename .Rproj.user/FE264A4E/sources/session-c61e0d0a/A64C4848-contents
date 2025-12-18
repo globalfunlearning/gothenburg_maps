@@ -1,0 +1,382 @@
+
+# =============================================================================
+# TEST AV NYA KLASSINDELNINGSMETODER
+# =============================================================================
+# 
+# Testar kmeans, hclust, dpih, headtails, maximum och box med konkreta exempel
+#
+# =============================================================================
+
+library(ggplot2)
+library(dplyr)
+
+# Ladda classify.R
+source("R/classify.R")
+
+# Skapa testdata med olika fördelningar
+set.seed(123)
+
+# 1. Normal fördelning (för kmeans, hclust, maximum)
+normal_data <- rnorm(100, mean = 50, sd = 15)
+
+# 2. Skev fördelning (för quantile, fisher)
+skewed_data <- c(rnorm(80, mean = 20, sd = 5), rnorm(20, mean = 80, sd = 10))
+
+# 3. Heavy-tailed fördelning (för headtails)
+# Pareto-liknande: få höga värden, många låga
+heavy_tail <- c(runif(70, 0, 10), runif(20, 10, 50), runif(10, 50, 200))
+
+# 4. Data med outliers (för box)
+with_outliers <- c(rnorm(90, mean = 50, sd = 10), c(10, 15, 85, 90, 95))
+
+
+# =============================================================================
+# 1. KMEANS - K-means clustering
+# =============================================================================
+
+cat("\n=== 1. KMEANS - K-means clustering ===\n")
+cat("Använder k-means algoritm för att hitta naturliga grupperingar\n")
+cat("Bra för: Data med tydliga kluster\n\n")
+
+# Enkel användning
+breaks_km <- create_breaks(normal_data, "kmeans", n_classes = 4)
+cat("\nBreaks (4 klasser):\n")
+print(round(breaks_km, 1))
+
+# Med labels
+labels_km <- create_labels(breaks_km, "range", decimals = 1)
+cat("\nLabels:\n")
+print(labels_km)
+
+# Visualisera
+df_km <- data.frame(
+  value = normal_data,
+  klass = apply_classification(normal_data, breaks_km, labels_km)
+)
+
+p1 <- ggplot(df_km, aes(x = value, fill = klass)) +
+  geom_histogram(bins = 30, color = "white") +
+  labs(title = "K-means (4 klasser)", x = "Värde", y = "Antal") +
+  theme_minimal()
+
+print(p1)
+
+
+# =============================================================================
+# 2. HCLUST - Hierarkisk clustering
+# =============================================================================
+
+cat("\n\n=== 2. HCLUST - Hierarkisk clustering ===\n")
+cat("Bygger ett hierarkiskt träd (dendrogram) och klipper vid lämpliga nivåer\n")
+cat("Bra för: Hitta naturliga hierarkier i data\n\n")
+
+# Enkel användning
+breaks_hc <- create_breaks(normal_data, "hclust", n_classes = 5)
+cat("\nBreaks (5 klasser):\n")
+print(round(breaks_hc, 1))
+
+# Med olika clustering-metoder (skickas via ...)
+breaks_hc_complete <- create_breaks(normal_data, "hclust", n_classes = 5, method = "complete")
+breaks_hc_single <- create_breaks(normal_data, "hclust", n_classes = 5, method = "single")
+
+cat("\nComplete linkage:\n")
+print(round(breaks_hc_complete, 1))
+cat("\nSingle linkage:\n")
+print(round(breaks_hc_single, 1))
+
+
+# =============================================================================
+# 3. DPIH - Data-driven histogram binwidth
+# =============================================================================
+
+cat("\n\n=== 3. DPIH - Data-driven histogram binwidth ===\n")
+cat("Bestämmer AUTOMATISKT antal klasser baserat på data\n")
+cat("Bra för: När du inte vet hur många klasser som passar\n\n")
+
+# DPIH bestämmer själv antal klasser (ingen n_classes parameter!)
+breaks_dp <- create_breaks(normal_data, "dpih")
+cat("\nBreaks (", length(breaks_dp) - 1, " klasser - automatiskt valt!):\n", sep = "")
+print(round(breaks_dp, 1))
+
+# Testa med skev data
+breaks_dp_skew <- create_breaks(skewed_data, "dpih")
+cat("\nMed skev data (", length(breaks_dp_skew) - 1, " klasser):\n", sep = "")
+print(round(breaks_dp_skew, 1))
+
+# Visualisera båda
+df_dp1 <- data.frame(
+  value = normal_data,
+  klass = apply_classification(
+    normal_data, 
+    breaks_dp, 
+    create_labels(breaks_dp, "range", decimals = 1)
+  ),
+  dataset = "Normal"
+)
+
+df_dp2 <- data.frame(
+  value = skewed_data,
+  klass = apply_classification(
+    skewed_data, 
+    breaks_dp_skew, 
+    create_labels(breaks_dp_skew, "range", decimals = 1)
+  ),
+  dataset = "Skev"
+)
+
+df_dp <- rbind(df_dp1, df_dp2)
+
+p2 <- ggplot(df_dp, aes(x = value, fill = klass)) +
+  geom_histogram(bins = 30, color = "white") +
+  facet_wrap(~dataset, scales = "free") +
+  labs(title = "DPIH - Automatiskt antal klasser", x = "Värde", y = "Antal") +
+  theme_minimal()
+
+print(p2)
+
+
+# =============================================================================
+# 4. HEADTAILS - För heavy-tailed distributioner
+# =============================================================================
+
+cat("\n\n=== 4. HEADTAILS - För heavy-tailed distributioner ===\n")
+cat("Designad för data där få observationer har extremt höga värden\n")
+cat("Bra för: Befolkningsstorlek städer, inkomstfördelning, sociala medier\n\n")
+
+# Headtails bestämmer själv antal klasser
+breaks_ht <- create_breaks(heavy_tail, "headtails")
+cat("\nBreaks (", length(breaks_ht) - 1, " klasser - automatiskt!):\n", sep = "")
+print(round(breaks_ht, 1))
+
+# Testa med normal data (borde ge färre klasser)
+breaks_ht_norm <- create_breaks(normal_data, "headtails")
+cat("\nMed normal data (", length(breaks_ht_norm) - 1, " klasser):\n", sep = "")
+print(round(breaks_ht_norm, 1))
+
+cat("\nOBS: Heavy-tailed data → fler klasser (", length(breaks_ht) - 1, ")\n", sep = "")
+cat("     Normal data → färre klasser (", length(breaks_ht_norm) - 1, ")\n", sep = "")
+
+# Visualisera skillnaden
+df_ht1 <- data.frame(
+  value = heavy_tail,
+  klass = apply_classification(
+    heavy_tail, 
+    breaks_ht, 
+    create_labels(breaks_ht, "range", decimals = 0)
+  ),
+  dataset = "Heavy-tailed"
+)
+
+df_ht2 <- data.frame(
+  value = normal_data,
+  klass = apply_classification(
+    normal_data, 
+    breaks_ht_norm, 
+    create_labels(breaks_ht_norm, "range", decimals = 1)
+  ),
+  dataset = "Normal"
+)
+
+df_ht <- rbind(df_ht1, df_ht2)
+
+p3 <- ggplot(df_ht, aes(x = value, fill = klass)) +
+  geom_histogram(bins = 30, color = "white") +
+  facet_wrap(~dataset, scales = "free") +
+  labs(
+    title = "HeadTails - Anpassar sig till fördelningen", 
+    subtitle = "Heavy-tailed data får fler klasser automatiskt",
+    x = "Värde", 
+    y = "Antal"
+  ) +
+  theme_minimal()
+
+print(p3)
+
+# Justera tröskelvärde (threshold)
+# VARFÖR thr?: Bestämmer hur "heavy-tailed" data måste vara
+breaks_ht_strict <- create_breaks(heavy_tail, "headtails", thr = 0.6)
+cat("\nMed striktare threshold (thr = 0.6): ", length(breaks_ht_strict) - 1, " klasser\n", sep = "")
+print(round(breaks_ht_strict, 1))
+
+
+# =============================================================================
+# 5. MAXIMUM - Maximum breaks method
+# =============================================================================
+
+cat("\n\n=== 5. MAXIMUM - Maximum breaks method ===\n")
+cat("Hittar de största skillnaderna mellan värden och sätter breaks där\n")
+cat("Bra för: Hitta naturliga 'hopp' i data\n\n")
+
+# Skapa data med tydliga gap
+gapped_data <- c(
+  rnorm(30, mean = 20, sd = 3),   # Grupp 1
+  rnorm(30, mean = 50, sd = 4),   # Grupp 2
+  rnorm(30, mean = 80, sd = 3)    # Grupp 3
+)
+
+# Maximum hittar automatiskt antal klasser
+breaks_max <- create_breaks(gapped_data, "maximum")
+cat("\nBreaks (", length(breaks_max) - 1, " klasser):\n", sep = "")
+print(round(breaks_max, 1))
+
+cat("\nOBS: Maximum hittade de 3 naturliga grupperna!\n")
+
+# Visualisera
+df_max <- data.frame(
+  value = gapped_data,
+  klass = apply_classification(
+    gapped_data, 
+    breaks_max, 
+    create_labels(breaks_max, "range", decimals = 0)
+  )
+)
+
+p4 <- ggplot(df_max, aes(x = value, fill = klass)) +
+  geom_histogram(bins = 40, color = "white") +
+  labs(
+    title = "Maximum - Hittar största skillnaderna", 
+    subtitle = "Identifierar automatiskt de 3 grupperna",
+    x = "Värde", 
+    y = "Antal"
+  ) +
+  theme_minimal()
+
+print(p4)
+
+
+# =============================================================================
+# 6. BOX - Boxplot-baserad klassindelning
+# =============================================================================
+
+cat("\n\n=== 6. BOX - Boxplot-baserad klassindelning ===\n")
+cat("Baserad på boxplot statistik (Q1, median, Q3, outliers)\n")
+cat("Bra för: Identifiera outliers, robust mot extremvärden\n")
+cat("ALLTID 6 klasser: [outliers låg] [Q1-median] [median-Q3] [outliers hög]\n\n")
+
+# Box ger alltid 6 klasser
+breaks_box <- create_breaks(with_outliers, "box")
+cat("\nBreaks (alltid 7 gränser = 6 klasser):\n")
+print(round(breaks_box, 1))
+
+# Skapa labels som visar vad klasserna betyder
+labels_box <- c(
+  "Outliers (låg)",
+  "Låg (< Q1)",
+  "Medellåg (Q1-median)",
+  "Medelhög (median-Q3)",
+  "Hög (> Q3)",
+  "Outliers (hög)"
+)
+
+# Applicera
+df_box <- data.frame(
+  value = with_outliers,
+  klass = apply_classification(with_outliers, breaks_box, labels_box)
+)
+
+# Visualisera
+p5 <- ggplot(df_box, aes(x = value, fill = klass)) +
+  geom_histogram(bins = 30, color = "white") +
+  labs(
+    title = "Box - Boxplot-baserad klassindelning", 
+    subtitle = "Identifierar outliers automatiskt",
+    x = "Värde", 
+    y = "Antal"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+print(p5)
+
+# Visa boxplot för jämförelse
+p6 <- ggplot(data.frame(value = with_outliers), aes(y = value)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Motsvarande boxplot", y = "Värde") +
+  theme_minimal()
+
+print(p6)
+
+# Justera outlier-gräns
+cat("\nJustera outlier-multiplikator (default = 1.5):\n")
+breaks_box_strict <- create_breaks(with_outliers, "box", iqr_mult = 3)
+cat("Med iqr_mult = 3 (strängare outlier-definition):\n")
+print(round(breaks_box_strict, 1))
+
+
+# =============================================================================
+# JÄMFÖRELSE: Alla metoder på samma data
+# =============================================================================
+
+cat("\n\n=== JÄMFÖRELSE: Alla metoder på skev data ===\n\n")
+
+metoder <- c("quantile", "equal", "fisher", "kmeans", "hclust")
+
+cat("Data: Skev fördelning med 100 observationer\n")
+cat("Antal klasser: 5 (för alla metoder som tar n)\n\n")
+
+for (metod in metoder) {
+  breaks <- create_breaks(skewed_data, metod, 5)
+  cat(sprintf("%-12s", paste0(metod, ":")), 
+      paste(round(breaks, 1), collapse = ", "), "\n")
+}
+
+# Visualisera jämförelse
+compare_methods(
+  skewed_data, 
+  methods = c("quantile", "fisher", "kmeans"), 
+  n_classes = 5
+)
+
+
+# =============================================================================
+# SAMMANFATTNING OCH REKOMMENDATIONER
+# =============================================================================
+
+cat("\n\n=== SAMMANFATTNING ===\n\n")
+
+cat("ANVÄND NÄR:\n\n")
+
+cat("QUANTILE\n")
+cat("  - Skev data där du vill ha lika många per klass\n")
+cat("  - Standard för choropleth-kartor\n\n")
+
+cat("EQUAL\n")
+cat("  - Jämn data, enkelt att förstå\n")
+cat("  - Bra för presentation\n\n")
+
+cat("FISHER\n")
+cat("  - Bästa 'natural breaks' metod\n")
+cat("  - Snabbare och bättre än jenks\n")
+cat("  - Användbar för de flesta fall\n\n")
+
+cat("KMEANS\n")
+cat("  - Data med tydliga kluster\n")
+cat("  - Alternativ till fisher\n\n")
+
+cat("HCLUST\n")
+cat("  - När du vill se hierarkisk struktur\n")
+cat("  - Bra för kategorisering\n\n")
+
+cat("DPIH\n")
+cat("  - Osäker på antal klasser? Denna väljer åt dig!\n")
+cat("  - Baserad på histogram-teori\n\n")
+
+cat("HEADTAILS\n")
+cat("  - Heavy-tailed data (städer, inkomst, social media)\n")
+cat("  - Automatiskt antal klasser\n\n")
+
+cat("MAXIMUM\n")
+cat("  - Hitta naturliga 'hopp' i data\n")
+cat("  - Data med tydliga gap mellan grupper\n\n")
+
+cat("BOX\n")
+cat("  - Identifiera outliers\n")
+cat("  - Alltid 6 klasser (boxplot-struktur)\n")
+cat("  - Robust mot extremvärden\n\n")
+
+
+cat("\n=== KLART! ===\n")
+cat("\nAlla nya metoder fungerar!\n")
+cat("Testa själv med din egen data:\n")
+cat("  breaks <- create_breaks(din_data, 'fisher', 5)\n")
+cat("  breaks <- create_breaks(din_data, 'headtails')  # Auto antal\n\n")

@@ -1,0 +1,960 @@
+# =============================================================================
+# SKAPA FÖRBEREDDA DESO OCH REGSO 2025 KARTLAGER - FIXAD VERSION
+# =============================================================================
+#
+# FIXAT: Hanterar SCB:s faktiska kolumnnamn (desokod, regsokod, kommunkod)
+#
+# =============================================================================
+
+library(sf)
+library(dplyr)
+library(readxl)
+
+# Ladda funktioner
+source("R/geodata.R")
+
+# =============================================================================
+# STEG 1: DEFINIERA KOMMUNER
+# =============================================================================
+
+# Göteborg
+GOTEBORG_KOD <- "1480"
+
+# Göteborgsregionens 13 kommuner
+  GR_KOMMUNER <- c(
+    "1440",  # Ale        
+    "1489",  # Alingsås   
+    "1480",  # Göteborg   
+    "1401",  # Härryda    
+    "1384",  # Kungsbacka 
+    "1482",  # Kungälv   
+    "1441",  # Lerum     
+    "1462",  # Lilla Edet 
+    "1481",  # Mölndal    
+    "1402",  # Partille   
+    "1415",  # Stenungsund
+    "1419",  # Tjörn      
+    "1407"   # Öckerö     
+)
+
+# =============================================================================
+# STEG 2: LADDA DATA FRÅN SCB
+# =============================================================================
+
+message("\n=== LADDAR DATA FRÅN SCB (2025 ÅRS VERSION) ===\n")
+
+# Ladda DeSO 2025
+message("1/3: DeSO 2025...")
+deso_alla <- load_deso_from_scb()
+
+# Ladda RegSO 2025
+message("\n2/3: RegSO 2025...")
+regso_alla <- load_regso_from_scb()
+
+# Ladda kopplingstabell
+message("\n3/3: Kopplingstabell DeSO-RegSO...")
+koppling <- load_deso_regso_koppling()
+
+# =============================================================================
+# STEG 3: KOPPLA REGSO-INFO TILL DESO
+# =============================================================================
+
+message("\n=== KOPPLAR REGSO-INFO TILL DESO ===\n")
+
+# Visa kolumnnamn
+message("Kolumner i DeSO-data: ", paste(names(deso_alla), collapse = ", "))
+message("Kolumner i koppling: ", paste(names(koppling), collapse = ", "))
+
+# IDENTIFIERA KOLUMNNAMN
+# VARFÖR?: SCB använder gemener (desokod, regsokod, kommunkod)
+
+# DeSO-kolumn
+deso_col <- NULL
+possible_deso <- c("desokod", "deso", "DeSO", "DeSO_2025", "deso_2025", "DESO")
+
+for (col in possible_deso) {
+  if (col %in% names(deso_alla)) {
+    deso_col <- col
+    break
+  }
+}
+
+if (is.null(deso_col)) {
+  stop("Kunde inte hitta DeSO-kolumn. Tillgängliga: ", 
+       paste(names(deso_alla), collapse = ", "))
+}
+
+# Kommun-kolumn
+kommun_col <- NULL
+possible_kommun <- c("kommunkod", "kommun", "Kommun", "kommun_kod")
+
+for (col in possible_kommun) {
+  if (col %in% names(deso_alla)) {
+    kommun_col <- col
+    break
+  }
+}
+
+if (is.null(kommun_col)) {
+  stop("Kunde inte hitta kommun-kolumn. Tillgängliga: ", 
+       paste(names(deso_alla), collapse = ", "))
+}
+
+message("✓ Använder kolumner:")
+message("  DeSO: '", deso_col, "'")
+message("  Kommun: '", kommun_col, "'")
+
+# KOPPLA REGSO-INFO TILL DESO
+# VARFÖR left_join?: Behåller alla DeSO även om koppling saknas
+
+# OBS: DeSO-data har redan regsokod, men vi vill ha RegSO-namn från kopplingstabellen
+deso_alla <- deso_alla |>
+  left_join(
+    koppling |>
+      select(DeSO_2025, RegSO_2025, RegSOkod_2025),  # Välj relevanta kolumner
+    by = setNames("DeSO_2025", deso_col)
+  )
+
+# Kontrollera koppling
+n_med_regso_namn <- sum(!is.na(deso_alla$RegSO_2025))
+koppling_pct <- round(n_med_regso_namn / nrow(deso_alla) * 100, 1)
+
+message("✓ Kopplade RegSO-namn till DeSO")
+message("  ", n_med_regso_namn, "/", nrow(deso_alla), " DeSO har RegSO-namn (", 
+        koppling_pct, "%)")
+
+if (koppling_pct < 100) {
+  n_saknas <- nrow(deso_alla) - n_med_regso_namn
+  warning("  ", n_saknas, " DeSO-områden saknar RegSO-namn från kopplingstabellen")
+}
+
+# Visa exempel på data
+message("\nExempel på första raden:")
+message("  DeSO-kod (", deso_col, "): ", deso_alla[[deso_col]][1])
+message("  RegSO-kod (regsokod): ", deso_alla$regsokod[1])
+message("  RegSO-namn (RegSO_2025): ", 
+        if (!is.na(deso_alla$RegSO_2025[1])) deso_alla$RegSO_2025[1] else "saknas")
+
+# =============================================================================
+# STEG 4: FILTRERA TILL GÖTEBORG
+# =============================================================================
+
+message("\n=== FILTRERAR TILL GÖTEBORG ===\n")
+
+# DeSO Göteborg (med RegSO-info)
+deso_goteborg <- deso_alla |>
+  filter(.data[[kommun_col]] == GOTEBORG_KOD)
+
+message("✓ DeSO Göteborg: ", nrow(deso_goteborg), " områden")
+message("  Kolumner: ", paste(names(deso_goteborg), collapse = ", "))
+
+# Kontrollera RegSO-täckning i Göteborg
+n_gbg_regso <- sum(!is.na(deso_goteborg$RegSO_2025))
+message("  → ", n_gbg_regso, " av ", nrow(deso_goteborg), 
+        " har RegSO-namn (", round(n_gbg_regso/nrow(deso_goteborg)*100, 1), "%)")
+
+# RegSO Göteborg
+regso_goteborg <- regso_alla |>
+  filter(.data[[kommun_col]] == GOTEBORG_KOD)
+
+message("✓ RegSO Göteborg: ", nrow(regso_goteborg), " områden")
+
+# =============================================================================
+# STEG 5: FILTRERA TILL GÖTEBORGSREGIONEN
+# =============================================================================
+
+message("\n=== FILTRERAR TILL GÖTEBORGSREGIONEN (13 KOMMUNER) ===\n")
+
+# DeSO GR (med RegSO-info)
+deso_gr <- deso_alla |>
+  filter(.data[[kommun_col]] %in% GR_KOMMUNER)
+
+message("✓ DeSO GR: ", nrow(deso_gr), " områden i ", length(GR_KOMMUNER), " kommuner")
+
+# Kontrollera RegSO-täckning i GR
+n_gr_regso <- sum(!is.na(deso_gr$RegSO_2025))
+message("  → ", n_gr_regso, " av ", nrow(deso_gr), 
+        " har RegSO-namn (", round(n_gr_regso/nrow(deso_gr)*100, 1), "%)")
+
+# RegSO GR
+regso_gr <- regso_alla |>
+  filter(.data[[kommun_col]] %in% GR_KOMMUNER)
+
+message("✓ RegSO GR: ", nrow(regso_gr), " områden i ", length(GR_KOMMUNER), " kommuner")
+
+# =============================================================================
+# STEG 6: SPARA SOM .RDS-FILER
+# =============================================================================
+
+message("\n=== SPARAR FÖRBEREDDA KARTLAGER ===\n")
+
+# Skapa mappar
+dir.create("input/prepared_maps/goteborg", recursive = TRUE, showWarnings = FALSE)
+dir.create("input/prepared_maps/sverige", recursive = TRUE, showWarnings = FALSE)
+
+# 1. DeSO Göteborg
+saveRDS(deso_goteborg, "input/prepared_maps/goteborg/deso_goteborg.rds")
+message("✓ Sparad: input/prepared_maps/goteborg/deso_goteborg.rds")
+message("  Storlek: ", round(file.size("input/prepared_maps/goteborg/deso_goteborg.rds")/1024, 1), " KB")
+
+# 2. RegSO Göteborg
+saveRDS(regso_goteborg, "input/prepared_maps/goteborg/regso_goteborg.rds")
+message("✓ Sparad: input/prepared_maps/goteborg/regso_goteborg.rds")
+
+# 3. DeSO GR
+saveRDS(deso_gr, "input/prepared_maps/sverige/deso_gr.rds")
+message("✓ Sparad: input/prepared_maps/sverige/deso_gr.rds")
+message("  Storlek: ", round(file.size("input/prepared_maps/sverige/deso_gr.rds")/1024, 1), " KB")
+
+# 4. RegSO GR
+saveRDS(regso_gr, "input/prepared_maps/sverige/regso_gr.rds")
+message("✓ Sparad: input/prepared_maps/sverige/regso_gr.rds")
+
+# =============================================================================
+# STEG 7: SAMMANFATTNING
+# =============================================================================
+
+message("\n", strrep("=", 70))
+message("SAMMANFATTNING")
+message(strrep("=", 70))
+
+cat("\nSkapade 4 förberedda kartlager (DeSO 2025 & RegSO 2025):\n\n")
+
+cat("GÖTEBORG:\n")
+cat("  - deso_goteborg.rds:  ", nrow(deso_goteborg), " DeSO-områden\n")
+cat("    Kolumner: desokod, regsokod, kommunkod, kommunnamn,\n")
+cat("              RegSO_2025 (namn), RegSOkod_2025 (kod), geometry\n")
+cat("  - regso_goteborg.rds: ", nrow(regso_goteborg), " RegSO-områden\n\n")
+
+cat("GÖTEBORGSREGIONEN (13 kommuner):\n")
+cat("  - deso_gr.rds:        ", nrow(deso_gr), " DeSO-områden\n")
+cat("    Kolumner: desokod, regsokod, kommunkod, kommunnamn,\n")
+cat("              RegSO_2025 (namn), RegSOkod_2025 (kod), geometry\n")
+cat("  - regso_gr.rds:       ", nrow(regso_gr), " RegSO-områden\n\n")
+
+cat("ANVÄNDNING:\n")
+cat("  # Ladda förberedda lager:\n")
+cat("  deso_gbg <- load_prepared_map(\"goteborg/deso_goteborg\")\n")
+cat("  \n")
+cat("  # Tillgängliga kolumner:\n")
+cat("  names(deso_gbg)\n")
+cat("  # → desokod, regsokod, kommunkod, kommunnamn,\n")
+cat("  #   RegSO_2025, RegSOkod_2025, geometry\n\n")
+
+cat("EXEMPEL - Aggregera DeSO till RegSO:\n")
+cat("  deso_gbg %>%\n")
+cat("    st_drop_geometry() %>%\n")
+cat("    group_by(RegSO_2025, regsokod) %>%\n")
+cat("    summarise(\n")
+cat("      antal_deso = n(),\n")
+cat("      befolkning_tot = sum(befolkning, na.rm = TRUE)\n")
+cat("    )\n\n")
+
+cat("EXEMPEL - Karta färgad efter RegSO:\n")
+cat("  ggplot(deso_gbg, aes(fill = RegSO_2025)) +\n")
+cat("    geom_sf(color = \"white\", linewidth = 0.05) +\n")
+cat("    labs(title = \"DeSO-områden färgade efter RegSO\") +\n")
+cat("    theme_void()\n\n")
+
+message(strrep("=", 70))
+cat("\n✓ KLART! DeSO 2025 och RegSO 2025 är redo att använda. 🎉\n\n")
+
+# =============================================================================
+# STEG 8: PREVIEW-KARTOR
+# =============================================================================
+
+message("=== SKAPAR PREVIEW-KARTOR ===\n")
+
+library(ggplot2)
+
+dir.create("output", showWarnings = FALSE)
+
+# 1. DeSO Göteborg färgad efter RegSO
+p1 <- ggplot(deso_goteborg) +
+  geom_sf(aes(fill = RegSO_2025), color = "white", linewidth = 0.05) +
+  labs(
+    title = "DeSO 2025 - Göteborg",
+    subtitle = paste(nrow(deso_goteborg), "DeSO-områden färgade efter RegSO"),
+    fill = "RegSO-område"
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.key.size = unit(0.4, "cm"),
+    legend.text = element_text(size = 7)
+  )
+
+ggsave("output/preview_deso_goteborg_2025.png", p1, 
+       width = 10, height = 10, dpi = 150)
+message("✓ output/preview_deso_goteborg_2025.png")
+
+# 2. DeSO GR färgad efter kommun
+p2 <- ggplot(deso_gr) +
+  geom_sf(aes(fill = kommunnamn), color = "white", linewidth = 0.02) +
+  labs(
+    title = "DeSO 2025 - Göteborgsregionen",
+    subtitle = paste(nrow(deso_gr), "DeSO-områden i 13 kommuner"),
+    fill = "Kommun"
+  ) +
+  theme_void() +
+  theme(legend.position = "right")
+
+ggsave("output/preview_deso_gr_2025.png", p2, 
+       width = 12, height = 10, dpi = 150)
+message("✓ output/preview_deso_gr_2025.png")
+
+# 3. RegSO Göteborg
+p3 <- ggplot(regso_goteborg) +
+  geom_sf(fill = "#0076bc", color = "white", linewidth = 0.2) +
+  labs(
+    title = "RegSO 2025 - Göteborg",
+    subtitle = paste(nrow(regso_goteborg), "RegSO-områden")
+  ) +
+  theme_void()
+
+ggsave("output/preview_regso_goteborg_2025.png", p3, 
+       width = 10, height = 10, dpi = 150)
+message("✓ output/preview_regso_goteborg_2025.png")
+
+message("\n✓ ALLT KLART!\n")
+
+
+
+
+
+
+
+
+
+
+# Ladda DeSO och statistik
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+# → ~700 DeSO-områden
+
+# Exempel: SCB-statistik på DeSO-nivå
+
+library("pxweb")
+
+url_address <- "https://api.scb.se/OV0104/v1/doris/sv/ssd/START/BO/BO0104/BO0104X/BO0104T01N2"
+
+deso_uppladelseform_scb <- pxweb_get(
+  url = url_address,
+  query = list(
+    Region = c("*"),
+    Upplatelseform =  c("*"),
+    Tid = "2024",
+    ContentsCode = c("*")
+  )
+)
+
+# Bearbeta data
+befolkning_deso <- as.data.frame(deso_uppladelseform_scb) |>
+  pivot_wider(names_from = upplåtelseform, values_from = Antal) |>
+  mutate(andel_aganderatt = äganderätt / (hyresrätt + bostadsrätt + äganderätt)) |> 
+  rename(desokod = region)
+
+
+
+
+
+
+
+## 9. DeSO-karta för Göteborg med SCB-data (NYTT!)
+
+Finmaskig karta med DeSO-områden och bostadsdata från SCB.
+
+```r
+library(pxweb)
+library(tidyr)
+
+# 1. HÄMTA DATA FRÅN SCB
+url_address <- "https://api.scb.se/OV0104/v1/doris/sv/ssd/START/BO/BO0104/BO0104X/BO0104T01N2"
+
+deso_uppladelseform_scb <- pxweb_get(
+  url = url_address,
+  query = list(
+    Region = c("*"),
+    Upplatelseform = c("*"),
+    Tid = "2024",
+    ContentsCode = c("*")
+  )
+)
+
+# 2. BEARBETA DATA
+bostader_deso <- as.data.frame(deso_uppladelseform_scb) |>
+  pivot_wider(names_from = upplåtelseform, values_from = Antal) |>
+  mutate(
+    andel_aganderatt = äganderätt / (hyresrätt + bostadsrätt + äganderätt),
+    andel_aganderatt_pct = andel_aganderatt * 100  # Till procent
+  ) |>
+  rename(desokod = region)
+
+# 3. LADDA DESO OCH KOPPLA DATA
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+# → ~700 DeSO-områden
+
+karta <- join_stat_to_map(deso_gbg, bostader_deso, by = "desokod")
+# ✓ Perfekt matchning: 700/700 områden
+
+# 4. KLASSINDELA
+# Använd fisher för att hitta naturliga brytpunkter i äganderättsandel
+breaks <- create_breaks(karta$andel_aganderatt_pct, "fisher", 5)
+labels <- create_labels(breaks, "range", decimals = 0, unit = "%")
+karta$klass <- apply_classification(karta$andel_aganderatt_pct, breaks, labels)
+
+# 5. SKAPA KARTA
+ggplot(karta, aes(fill = klass)) +
+  geom_sf(color = "white", linewidth = 0.05) +
+  geom_sf(data = load_water_layer("goteborg/hav_goteborg"), fill = "lightblue", color = "white") +
+  scale_fill_gbg_sequential("green", n = 5) +
+  labs(
+    title = "Andel småhus (äganderätt) per DeSO-område",
+    subtitle = "Göteborg, ~700 DeSO-områden",
+    fill = "Andel småhus (%)",
+    caption = "Källa: SCB (2024)"
+  ) +
+  theme_gothenburg_map()
+
+# 6. SPARA
+ggsave("output/maps/deso_gbg_smahus.png", width = 12, height = 10, dpi = 300)
+```
+
+---
+  
+  ## 10. RegSO-karta för Göteborg (NYTT!)
+  
+  Översiktskarta med RegSO-områden (grövre indelning). Aggregerar DeSO-data till RegSO-nivå.
+
+```r
+# 1. ANVÄND SAMMA BOSTADSDATA FRÅN EXEMPEL 9
+# (se exempel 9 för hur data hämtas från SCB)
+
+# 2. LADDA DESO MED REGSO-KOPPLING
+deso_gbg <- load_prepared_map("goteborg/deso_goteborg")
+# → Har redan RegSO_2025 kolumn!
+
+# 3. KOPPLA BOSTADSDATA TILL DESO
+deso_med_data <- deso_gbg |>
+  left_join(bostader_deso, by = "desokod")
+
+# 4. AGGREGERA DESO TILL REGSO-NIVÅ
+# Räkna ut totalt antal bostäder per RegSO och andel småhus
+regso_data <- deso_med_data |>
+  st_drop_geometry() |>
+  group_by(RegSO_2025, RegSOkod_2025) |>
+  summarise(
+    totalt_hyresratt = sum(hyresrätt, na.rm = TRUE),
+    totalt_bostadsratt = sum(bostadsrätt, na.rm = TRUE),
+    totalt_aganderatt = sum(äganderätt, na.rm = TRUE),
+    antal_deso = n()
+  ) |>
+  mutate(
+    andel_aganderatt = totalt_aganderatt / 
+      (totalt_hyresratt + totalt_bostadsratt + totalt_aganderatt),
+    andel_aganderatt_pct = andel_aganderatt * 100
+  )
+
+# 5. LADDA REGSO-GEOMETRI OCH KOPPLA
+regso_gbg <- load_prepared_map("goteborg/regso_goteborg")
+# → ~90 RegSO-områden
+
+karta <- regso_gbg |>
+  left_join(regso_data, by = c("regsonamn" = "RegSO_2025"))
+
+# 6. KLASSINDELA
+breaks <- create_breaks(karta$andel_aganderatt_pct, "fisher", 5)
+labels <- create_labels(breaks, "range", decimals = 0, unit = "%")
+karta$klass <- apply_classification(karta$andel_aganderatt_pct, breaks, labels)
+
+# 7. SKAPA KARTA
+ggplot(karta, aes(fill = klass)) +
+  geom_sf(color = "white", linewidth = 0.2) +
+  geom_sf(data = load_water_layer("goteborg/hav_goteborg"), fill = "lightblue") +
+  scale_fill_gbg_sequential("green", n = 5) +
+  labs(
+    title = "Andel småhus (äganderätt) per RegSO-område",
+    subtitle = "Göteborg, ~90 RegSO-områden (aggregerat från DeSO)",
+    fill = "Andel småhus (%)",
+    caption = "Källa: SCB (2024)"
+  ) +
+  theme_gothenburg_map()
+
+# 8. SPARA
+ggsave("output/maps/regso_gbg_smahus.png", width = 12, height = 10, dpi = 300)
+```
+
+**TIPS:** RegSO är grövre → lättare att se övergripande mönster än DeSO.
+
+---
+  
+  ## 11. DeSO Göteborgsregionen med kommunfärger (NYTT!)
+  
+  Visa DeSO-områden i Göteborgsregionens 13 kommuner med olika färger per kommun och bostadsdata.
+
+```r
+# 1. ANVÄND SAMMA BOSTADSDATA FRÅN EXEMPEL 9
+# (se exempel 9 för hur data hämtas från SCB)
+
+# 2. LADDA DESO FÖR GÖTEBORGSREGIONEN
+deso_gr <- load_prepared_map("sverige/deso_gr")
+# → ~2400 DeSO-områden i 13 kommuner
+
+# 3. KOPPLA BOSTADSDATA
+karta <- join_stat_to_map(deso_gr, bostader_deso, by = "desokod")
+
+# 4. DEFINIERA FÄRGER PER KOMMUN
+# Göteborg: Göteborgsblå
+# Närliggande (Härryda, Mölndal, Partille, Kungälv, Lerum): dark_colors
+# Övriga 7: light_colors
+
+kommunfarger <- c(
+  "1480" = "#0076bc",      # Göteborg - Göteborgsblå
+  "1401" = "#084b83",      # Härryda - dark_blue
+  "1481" = "#6b2c5c",      # Mölndal - dark_purple
+  "1402" = "#8b5c10",      # Partille - dark_orange
+  "1482" = "#005f51",      # Kungälv - dark_green
+  "1441" = "#a4343a",      # Lerum - dark_red
+  "1440" = "#b3d9ff",      # Ale - light_blue
+  "1489" = "#d9c3d9",      # Alingsås - light_purple
+  "1384" = "#ffd699",      # Kungsbacka - light_orange
+  "1462" = "#a6d9cc",      # Lilla Edet - light_green
+  "1415" = "#ffb3b3",      # Stenungsund - light_red
+  "1419" = "#c2e0f2",      # Tjörn - light_cyan
+  "1407" = "#ffe6cc"       # Öckerö - light_peach
+)
+
+# 5. SKAPA KARTA - KOMMUNÖVERSIKT
+ggplot(karta, aes(fill = kommunkod)) +
+  geom_sf(color = "white", linewidth = 0.02) +
+  scale_fill_manual(
+    values = kommunfarger,
+    labels = c(
+      "1480" = "Göteborg",
+      "1401" = "Härryda",
+      "1481" = "Mölndal",
+      "1402" = "Partille",
+      "1482" = "Kungälv",
+      "1441" = "Lerum",
+      "1440" = "Ale",
+      "1489" = "Alingsås",
+      "1384" = "Kungsbacka",
+      "1462" = "Lilla Edet",
+      "1415" = "Stenungsund",
+      "1419" = "Tjörn",
+      "1407" = "Öckerö"
+    )
+  ) +
+  labs(
+    title = "DeSO-områden i Göteborgsregionen",
+    subtitle = "~2400 områden i 13 kommuner",
+    fill = "Kommun",
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map() +
+  theme(legend.position = "right")
+
+# 6. ALTERNATIV: KARTA MED SMÅHUSANDEL
+# Klassindela andel småhus
+breaks <- create_breaks(karta$andel_aganderatt_pct, "fisher", 6)
+labels <- create_labels(breaks, "range", decimals = 0, unit = "%")
+karta$klass <- apply_classification(karta$andel_aganderatt_pct, breaks, labels)
+
+ggplot(karta, aes(fill = klass)) +
+  geom_sf(color = "white", linewidth = 0.02) +
+  scale_fill_gbg_sequential("green", n = 6) +
+  labs(
+    title = "Andel småhus i Göteborgsregionen",
+    subtitle = "DeSO-områden (~2400), klassificering: Fisher",
+    fill = "Andel småhus (%)",
+    caption = "Källa: SCB (2024)"
+  ) +
+  theme_gothenburg_map()
+
+# 7. SPARA
+ggsave("output/maps/deso_gr_kommuner.png", width = 12, height = 10, dpi = 300)
+```
+
+---
+  
+  ## 12. RegSO Göteborgsregionen med kommunfärger (NYTT!)
+  
+  Översiktskarta med RegSO-områden i Göteborgsregionen (grövre indelning).
+
+```r
+# 1. ANVÄND SAMMA BOSTADSDATA FRÅN EXEMPEL 9
+
+# 2. LADDA DESO OCH AGGREGERA TILL REGSO
+deso_gr <- load_prepared_map("sverige/deso_gr")
+
+# Koppla bostadsdata till DeSO
+deso_med_data <- deso_gr |>
+  left_join(bostader_deso, by = "desokod")
+
+# Aggregera till RegSO-nivå
+regso_data <- deso_med_data |>
+  st_drop_geometry() |>
+  group_by(RegSO_2025, RegSOkod_2025, kommunkod, kommunnamn) |>
+  summarise(
+    totalt_hyresratt = sum(hyresrätt, na.rm = TRUE),
+    totalt_bostadsratt = sum(bostadsrätt, na.rm = TRUE),
+    totalt_aganderatt = sum(äganderätt, na.rm = TRUE),
+    antal_deso = n()
+  ) |>
+  mutate(
+    andel_aganderatt = totalt_aganderatt / 
+      (totalt_hyresratt + totalt_bostadsratt + totalt_aganderatt),
+    andel_aganderatt_pct = andel_aganderatt * 100
+  )
+
+# 3. LADDA REGSO-GEOMETRI OCH KOPPLA
+regso_gr <- load_prepared_map("sverige/regso_gr")
+# → ~300 RegSO-områden i 13 kommuner
+
+karta <- regso_gr |>
+  left_join(regso_data, by = c("regsonamn" = "RegSO_2025"))
+
+# 4. ANVÄND SAMMA KOMMUNFÄRGER SOM EXEMPEL 11
+kommunfarger <- c(
+  "1480" = "#0076bc",      # Göteborg - Göteborgsblå
+  "1401" = "#084b83",      # Härryda - dark_blue
+  "1481" = "#6b2c5c",      # Mölndal - dark_purple
+  "1402" = "#8b5c10",      # Partille - dark_orange
+  "1482" = "#005f51",      # Kungälv - dark_green
+  "1441" = "#a4343a",      # Lerum - dark_red
+  "1440" = "#b3d9ff",      # Ale - light_blue
+  "1489" = "#d9c3d9",      # Alingsås - light_purple
+  "1384" = "#ffd699",      # Kungsbacka - light_orange
+  "1462" = "#a6d9cc",      # Lilla Edet - light_green
+  "1415" = "#ffb3b3",      # Stenungsund - light_red
+  "1419" = "#c2e0f2",      # Tjörn - light_cyan
+  "1407" = "#ffe6cc"       # Öckerö - light_peach
+)
+
+# 5. SKAPA KARTA - KOMMUNÖVERSIKT
+ggplot(karta, aes(fill = kommunkod)) +
+  geom_sf(color = "white", linewidth = 0.1) +
+  scale_fill_manual(
+    values = kommunfarger,
+    labels = c(
+      "1480" = "Göteborg",
+      "1401" = "Härryda",
+      "1481" = "Mölndal",
+      "1402" = "Partille",
+      "1482" = "Kungälv",
+      "1441" = "Lerum",
+      "1440" = "Ale",
+      "1489" = "Alingsås",
+      "1384" = "Kungsbacka",
+      "1462" = "Lilla Edet",
+      "1415" = "Stenungsund",
+      "1419" = "Tjörn",
+      "1407" = "Öckerö"
+    )
+  ) +
+  labs(
+    title = "RegSO-områden i Göteborgsregionen",
+    subtitle = "~300 områden i 13 kommuner (grövre indelning än DeSO)",
+    fill = "Kommun",
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map() +
+  theme(
+    legend.position = "right",
+    legend.key.size = unit(0.5, "cm")
+  )
+
+# 6. ALTERNATIV: KARTA MED SMÅHUSANDEL
+breaks <- create_breaks(karta$andel_aganderatt_pct, "fisher", 6)
+labels <- create_labels(breaks, "range", decimals = 0, unit = "%")
+karta$klass <- apply_classification(karta$andel_aganderatt_pct, breaks, labels)
+
+ggplot(karta, aes(fill = klass)) +
+  geom_sf(color = "white", linewidth = 0.1) +
+  scale_fill_gbg_sequential("green", n = 6) +
+  labs(
+    title = "Andel småhus i Göteborgsregionen (RegSO-nivå)",
+    subtitle = "~300 RegSO-områden (aggregerat från DeSO)",
+    fill = "Andel småhus (%)",
+    caption = "Källa: SCB (2024)"
+  ) +
+  theme_gothenburg_map()
+
+# 7. SPARA
+ggsave("output/maps/regso_gr_kommuner.png", width = 12, height = 10, dpi = 300)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+befolkning_deso <- deso_uppladelseform_scb #read_csv("data/befolkning_deso_2025.csv")
+# Kolumner: desokod, befolkning, medelinkomst
+
+# Koppla data
+karta <- join_stat_to_map(deso_gbg, befolkning_deso, by = "desokod")
+
+# Klassindela
+breaks <- create_breaks(karta$andel_aganderatt, "fisher", 5)
+labels <- create_labels(breaks, "range", decimals = 0, unit = "invånare")
+karta$klass <- apply_classification(karta$andel_aganderatt, breaks, labels)
+
+# Skapa karta
+ggplot(karta, aes(fill = klass)) +
+  geom_sf(color = "white", linewidth = 0.05) +
+  scale_fill_gbg_sequential("blue", n = 5) +
+  labs(
+    title = "Befolkning per DeSO-område - Göteborg",
+    subtitle = "~700 DeSO-områden",
+    fill = "Befolkning",
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map()
+
+10. RegSO-karta för Göteborg (NYTT!)
+Översiktskarta med RegSO-områden (grövre indelning).
+r# Ladda RegSO
+regso_gbg <- load_prepared_map("goteborg/regso_goteborg")
+# → ~90 RegSO-områden
+
+# Koppla data (samma statistik kan aggregeras till RegSO)
+befolkning_regso <- befolkning_deso |>
+  left_join(
+    deso_gbg |> st_drop_geometry() |> select(desokod, RegSO_2025, RegSOkod_2025),
+    by = "desokod"
+  ) |>
+  group_by(RegSO_2025) |>
+  summarise(befolkning = sum(befolkning, na.rm = TRUE))
+
+# Koppla till RegSO-geometri
+karta <- regso_gbg |>
+  left_join(befolkning_regso, by = c("regsonamn" = "RegSO_2025"))
+
+# Klassindela
+breaks <- create_breaks(karta$befolkning, "fisher", 5)
+labels <- create_labels(breaks, "range", decimals = 0, unit = "invånare")
+karta$klass <- apply_classification(karta$befolkning, breaks, labels)
+
+# Skapa karta
+ggplot(karta, aes(fill = klass)) +
+  geom_sf(color = "white", linewidth = 0.2) +
+  scale_fill_gbg_sequential("blue", n = 5) +
+  labs(
+    title = "Befolkning per RegSO-område - Göteborg",
+    subtitle = "~90 RegSO-områden (grövre indelning än DeSO)",
+    fill = "Befolkning",
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map()
+
+11. DeSO Göteborgsregionen med kommunfärger (NYTT!)
+Visa DeSO-områden i Göteborgsregionens 13 kommuner med olika färger per kommun.
+r# Ladda DeSO för Göteborgsregionen
+deso_gr <- load_prepared_map("sverige/deso_gr")
+# → ~2400 DeSO-områden i 13 kommuner
+
+# Definiera färger per kommun
+# Göteborg: Göteborgsblå
+# Närliggande (Härryda, Mölndal, Partille, Kungälv, Lerum): dark_colors
+# Övriga 7: light_colors
+
+kommunfarger <- c(
+  "1480" = "#0076bc",      # Göteborg - Göteborgsblå
+  "1401" = "#084b83",      # Härryda - dark_blue
+  "1481" = "#6b2c5c",      # Mölndal - dark_purple
+  "1402" = "#8b5c10",      # Partille - dark_orange
+  "1482" = "#005f51",      # Kungälv - dark_green
+  "1441" = "#a4343a",      # Lerum - dark_red
+  "1440" = "#b3d9ff",      # Ale - light_blue
+  "1489" = "#d9c3d9",      # Alingsås - light_purple
+  "1384" = "#ffd699",      # Kungsbacka - light_orange
+  "1462" = "#a6d9cc",      # Lilla Edet - light_green
+  "1415" = "#ffb3b3",      # Stenungsund - light_red
+  "1419" = "#c2e0f2",      # Tjörn - light_cyan
+  "1407" = "#ffe6cc"       # Öckerö - light_peach
+)
+
+# Skapa karta
+ggplot(deso_gr, aes(fill = kommunkod)) +
+  geom_sf(color = "white", linewidth = 0.02) +
+  scale_fill_manual(
+    values = kommunfarger,
+    labels = c(
+      "1480" = "Göteborg",
+      "1401" = "Härryda",
+      "1481" = "Mölndal",
+      "1402" = "Partille",
+      "1482" = "Kungälv",
+      "1441" = "Lerum",
+      "1440" = "Ale",
+      "1489" = "Alingsås",
+      "1384" = "Kungsbacka",
+      "1462" = "Lilla Edet",
+      "1415" = "Stenungsund",
+      "1419" = "Tjörn",
+      "1407" = "Öckerö"
+    )
+  ) +
+  labs(
+    title = "DeSO-områden i Göteborgsregionen",
+    subtitle = "~2400 områden i 13 kommuner",
+    fill = "Kommun",
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map() +
+  theme(legend.position = "right")
+
+# Spara
+ggsave("output/maps/deso_gr_kommuner.png", width = 12, height = 10, dpi = 300)
+
+12. RegSO Göteborgsregionen med kommunfärger (NYTT!)
+Översiktskarta med RegSO-områden i Göteborgsregionen.
+r# Ladda RegSO för Göteborgsregionen
+regso_gr <- load_prepared_map("sverige/regso_gr")
+# → ~300 RegSO-områden i 13 kommuner
+
+# Använd samma kommunfärger som i exempel 11
+kommunfarger <- c(
+  "1480" = "#0076bc",      # Göteborg - Göteborgsblå
+  "1401" = "#084b83",      # Härryda - dark_blue
+  "1481" = "#6b2c5c",      # Mölndal - dark_purple
+  "1402" = "#8b5c10",      # Partille - dark_orange
+  "1482" = "#005f51",      # Kungälv - dark_green
+  "1441" = "#a4343a",      # Lerum - dark_red
+  "1440" = "#b3d9ff",      # Ale - light_blue
+  "1489" = "#d9c3d9",      # Alingsås - light_purple
+  "1384" = "#ffd699",      # Kungsbacka - light_orange
+  "1462" = "#a6d9cc",      # Lilla Edet - light_green
+  "1415" = "#ffb3b3",      # Stenungsund - light_red
+  "1419" = "#c2e0f2",      # Tjörn - light_cyan
+  "1407" = "#ffe6cc"       # Öckerö - light_peach
+)
+
+# Skapa karta
+ggplot(regso_gr, aes(fill = kommunkod)) +
+  geom_sf(color = "white", linewidth = 0.1) +
+  scale_fill_manual(
+    values = kommunfarger,
+    labels = c(
+      "1480" = "Göteborg",
+      "1401" = "Härryda",
+      "1481" = "Mölndal",
+      "1402" = "Partille",
+      "1482" = "Kungälv",
+      "1441" = "Lerum",
+      "1440" = "Ale",
+      "1489" = "Alingsås",
+      "1384" = "Kungsbacka",
+      "1462" = "Lilla Edet",
+      "1415" = "Stenungsund",
+      "1419" = "Tjörn",
+      "1407" = "Öckerö"
+    )
+  ) +
+  labs(
+    title = "RegSO-områden i Göteborgsregionen",
+    subtitle = "~300 områden i 13 kommuner (grövre indelning än DeSO)",
+    fill = "Kommun",
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map() +
+  theme(
+    legend.position = "right",
+    legend.key.size = unit(0.5, "cm")
+  )
+
+# Spara
+ggsave("output/maps/regso_gr_kommuner.png", width = 12, height = 10, dpi = 300)
+
+
+
+
+
+
+
+library(sf)
+
+# 1. Beräkna centroider för varje kommun (där etiketten ska placeras)
+kommuner_centroids <- kommuner_gr |>
+  group_by(kommun_kod, kommun_namn) |>
+  summarise(geometry = st_union(geometry)) |>
+  st_centroid()
+
+# 2. Skapa karta MED etiketter
+ggplot() +
+  # DeSO-områden färgade per kommun
+  geom_sf(data = deso_gr, aes(fill = kommunkod), 
+          color = "white", linewidth = 0.02) +
+  
+  # Kommunnamn som etiketter
+  geom_sf_text(data = kommuner_centroids, 
+               aes(label = kommun_namn),
+               size = 3.5,
+               fontface = "bold",
+               color = "black") +
+  
+  # Färgschema
+  scale_fill_manual(
+    values = kommunfarger,
+    guide = "none"  # TA BORT legend
+  ) +
+  
+  # Titlar
+  labs(
+    title = "DeSO-områden i Göteborgsregionen",
+    subtitle = "~2400 områden i 13 kommuner",
+    caption = "Källa: SCB"
+  ) +
+  
+  theme_gothenburg_map()
+
+
+
+
+
+
+
+library(ggrepel)  # install.packages("ggrepel") om du inte har det
+
+ggplot() +
+  # DeSO-områden
+  geom_sf(data = deso_gr, aes(fill = kommunkod), 
+          color = "white", linewidth = 0.02) +
+  
+  # Etiketter med VIT BAKGRUND
+  geom_label_repel(
+    data = kommuner_centroids,
+    aes(label = kommun_namn, 
+        geometry = geometry),
+    stat = "sf_coordinates",
+    size = 3.5,
+    fontface = "bold",
+    color = "black",
+    fill = "white",           # Vit bakgrund
+    label.padding = 0.25,     # Padding runt text
+    label.size = 0.3,         # Ram runt label
+    alpha = 0.9,              # Lite genomskinlig
+    segment.color = "gray30", # Linjefärg om text flyttas
+    min.segment.length = 0
+  ) +
+  
+  scale_fill_manual(values = kommunfarger, guide = "none") +
+  
+  labs(
+    title = "DeSO-områden i Göteborgsregionen",
+    subtitle = "",
+    caption = "Källa: SCB"
+  ) +
+  
+  theme_gothenburg_map()

@@ -1,0 +1,1132 @@
+# =============================================================================
+# SKAPA CLIPPADE DESO/REGSO-LAGER FÖR GÖTEBORG
+# =============================================================================
+#
+# Problem: DeSO/RegSO sticker ut över vatten när vattenlager läggs på
+# Lösning: Clippa DeSO/RegSO mot "landareal" (kommungräns minus vatten)
+#
+# Detta ger:
+# - Snygga kartor utan överlapp
+# - Snabbare rendering (färre vertices)
+# - Enklare kod vid kartframställning
+#
+# OBS: Areor blir inte helt korrekta, men det spelar ingen roll för
+# visualisering (SCB:s statistik gäller hela DeSO/RegSO oavsett).
+#
+# =============================================================================
+
+library(sf)
+library(dplyr)
+
+source("R/geodata.R")
+
+# =============================================================================
+# STEG 1: LADDA GRUNDLAGER
+# =============================================================================
+
+message("\n=== LADDAR GRUNDLAGER ===\n")
+
+# DeSO och RegSO (oklippta)
+deso_gbg_orig <- load_prepared_map("goteborg/deso_goteborg")
+regso_gbg_orig <- load_prepared_map("goteborg/regso_goteborg")
+
+message("✓ DeSO Göteborg: ", nrow(deso_gbg_orig), " områden")
+message("✓ RegSO Göteborg: ", nrow(regso_gbg_orig), " områden")
+
+# Kommungräns (slå samman stadsområden)
+stadsomraden <- load_prepared_map("goteborg/stadsomraden")
+kommungrans <- st_union(stadsomraden)
+
+message("✓ Kommungräns (från 4 stadsområden → 1 geometri)")
+
+# Vattenlager
+alv <- load_water_layer("goteborg/alv_goteborg")
+hav <- load_water_layer("goteborg/hav_goteborg")
+
+if (is.null(alv) || is.null(hav)) {
+  stop("Vattenlager saknas! Skapa dessa först.")
+}
+
+message("✓ Älv och hav")
+
+# =============================================================================
+# STEG 2: SKAPA "LANDAREAL" (kommungräns minus vatten)
+# =============================================================================
+
+message("\n=== SKAPAR LANDAREAL ===\n")
+
+# Säkerställ att alla lager har samma CRS (SWEREF99 TM = 3006)
+# VARFÖR FÖRST?: st_union() kräver samma CRS
+target_crs <- st_crs(kommungrans)
+
+alv <- st_transform(alv, target_crs)
+hav <- st_transform(hav, target_crs)
+
+message("  Transformerade vatten till samma CRS")
+
+# Slå ihop älv och hav till ett vattenlager
+# VARFÖR?: Enklare att clippa mot en geometri
+vatten_totalt <- st_union(alv, hav)
+
+message("  Slog ihop älv och hav")
+
+# Skapa landareal genom st_difference
+# VARFÖR st_difference?: Tar bort vatten från kommungräns
+landareal <- st_difference(kommungrans, vatten_totalt)
+
+message("✓ Skapade landareal (kommungräns minus vatten)")
+
+# =============================================================================
+# STEG 3: CLIPPA DESO MOT LANDAREAL
+# =============================================================================
+
+message("\n=== CLIPPAR DESO MOT LANDAREAL ===\n")
+
+# st_intersection: Behåller bara del av DeSO som är på land
+# VARFÖR inte st_crop?: st_crop klipper mot bbox, inte mot faktisk geometri
+deso_gbg_clipped <- st_intersection(deso_gbg_orig, landareal)
+
+# Städa geometri-kolumner (st_intersection kan skapa dubbla)
+# VARFÖR?: st_intersection kan lägga till .1, .2 suffix
+deso_gbg_clipped <- deso_gbg_clipped |>
+  select(-starts_with("geometry.")) |>
+  select(-ends_with(".1"))
+
+message("✓ Clippade DeSO")
+message("  Före: ", nrow(deso_gbg_orig), " områden")
+message("  Efter: ", nrow(deso_gbg_clipped), " områden")
+
+# Kontrollera om några DeSO försvann helt
+if (nrow(deso_gbg_clipped) < nrow(deso_gbg_orig)) {
+  n_lost <- nrow(deso_gbg_orig) - nrow(deso_gbg_clipped)
+  warning("  ", n_lost, " DeSO försvann helt (låg helt i vatten?)")
+}
+
+# =============================================================================
+# STEG 4: CLIPPA REGSO MOT LANDAREAL
+# =============================================================================
+
+message("\n=== CLIPPAR REGSO MOT LANDAREAL ===\n")
+
+regso_gbg_clipped <- st_intersection(regso_gbg_orig, landareal)
+
+# Städa
+regso_gbg_clipped <- regso_gbg_clipped |>
+  select(-starts_with("geometry.")) |>
+  select(-ends_with(".1"))
+
+message("✓ Clippade RegSO")
+message("  Före: ", nrow(regso_gbg_orig), " områden")
+message("  Efter: ", nrow(regso_gbg_clipped), " områden")
+
+# =============================================================================
+# STEG 5: SPARA CLIPPADE LAGER
+# =============================================================================
+
+message("\n=== SPARAR CLIPPADE LAGER ===\n")
+
+# Spara med suffix "_clipped" eller ersätt original?
+# REKOMMENDATION: Ersätt original för att de alltid ska användas
+
+# Backup av original först
+if (!dir.exists("input/prepared_maps/goteborg/backup")) {
+  dir.create("input/prepared_maps/goteborg/backup", recursive = TRUE)
+}
+
+file.copy(
+  "input/prepared_maps/goteborg/deso_goteborg.rds",
+  "input/prepared_maps/goteborg/backup/deso_goteborg_original.rds",
+  overwrite = TRUE
+)
+
+file.copy(
+  "input/prepared_maps/goteborg/regso_goteborg.rds",
+  "input/prepared_maps/goteborg/backup/regso_goteborg_original.rds",
+  overwrite = TRUE
+)
+
+message("✓ Backup av original")
+
+# Spara clippade versioner
+saveRDS(deso_gbg_clipped, "input/prepared_maps/goteborg/deso_goteborg.rds")
+saveRDS(regso_gbg_clipped, "input/prepared_maps/goteborg/regso_goteborg.rds")
+
+message("✓ Sparade clippade versioner")
+message("  input/prepared_maps/goteborg/deso_goteborg.rds")
+message("  input/prepared_maps/goteborg/regso_goteborg.rds")
+
+# =============================================================================
+# STEG 6: JÄMFÖR FÖRE/EFTER
+# =============================================================================
+
+message("\n=== JÄMFÖRELSE FÖRE/EFTER ===\n")
+
+# Beräkna arealskillnad
+area_deso_orig <- sum(st_area(deso_gbg_orig))
+area_deso_clipped <- sum(st_area(deso_gbg_clipped))
+area_diff_deso <- as.numeric(area_deso_orig - area_deso_clipped) / 1e6  # km²
+
+area_regso_orig <- sum(st_area(regso_gbg_orig))
+area_regso_clipped <- sum(st_area(regso_gbg_clipped))
+area_diff_regso <- as.numeric(area_regso_orig - area_regso_clipped) / 1e6  # km²
+
+cat("DeSO:\n")
+cat("  Original area: ", round(as.numeric(area_deso_orig) / 1e6, 2), " km²\n")
+cat("  Clipped area:  ", round(as.numeric(area_deso_clipped) / 1e6, 2), " km²\n")
+cat("  Bortklippt:    ", round(area_diff_deso, 2), " km² (vatten)\n\n")
+
+cat("RegSO:\n")
+cat("  Original area: ", round(as.numeric(area_regso_orig) / 1e6, 2), " km²\n")
+cat("  Clipped area:  ", round(as.numeric(area_regso_clipped) / 1e6, 2), " km²\n")
+cat("  Bortklippt:    ", round(area_diff_regso, 2), " km² (vatten)\n\n")
+
+# =============================================================================
+# STEG 7: SKAPA JÄMFÖRELSEKARTOR
+# =============================================================================
+
+message("=== SKAPAR JÄMFÖRELSEKARTOR ===\n")
+
+library(ggplot2)
+
+dir.create("output/maps", showWarnings = FALSE, recursive = TRUE)
+
+# FÖRE: DeSO original + vatten
+p_fore <- ggplot() +
+  geom_sf(data = deso_gbg_orig, fill = "#a6d9cc", color = "white", linewidth = 0.05) +
+  geom_sf(data = alv, fill = "#b3d9ff", color = NA) +
+  geom_sf(data = hav, fill = "#b3d9ff", color = NA) +
+  labs(
+    title = "FÖRE: DeSO sticker ut över vatten",
+    subtitle = "Oklippt DeSO-lager"
+  ) +
+  theme_void()
+
+# EFTER: DeSO clipped + vatten
+p_efter <- ggplot() +
+  geom_sf(data = deso_gbg_clipped, fill = "#a6d9cc", color = "white", linewidth = 0.05) +
+  geom_sf(data = alv, fill = "#b3d9ff", color = NA) +
+  geom_sf(data = hav, fill = "#b3d9ff", color = NA) +
+  labs(
+    title = "EFTER: DeSO clippat mot landareal",
+    subtitle = "Clippat DeSO-lager"
+  ) +
+  theme_void()
+
+# Spara jämförelse
+library(patchwork)
+p_jamfor <- p_fore / p_efter
+
+ggsave(
+  "output/maps/deso_clippa_jamforelse.png",
+  p_jamfor,
+  width = 10,
+  height = 12,
+  dpi = 150
+)
+
+message("✓ Jämförelsekarta: output/maps/deso_clippa_jamforelse.png")
+
+message("\n✓ KLART! DeSO och RegSO är nu clippade mot landareal.\n")
+
+# =============================================================================
+# ANVÄNDNING EFTER KLIPPNING
+# =============================================================================
+
+cat("\nNu kan du enkelt använda:\n\n")
+cat("deso_gbg <- load_prepared_map('goteborg/deso_goteborg')\n")
+cat("alv <- load_water_layer('goteborg/alv_goteborg')\n\n")
+cat("ggplot() +\n")
+cat("  geom_sf(data = deso_gbg, aes(fill = varde)) +\n")
+cat("  geom_sf(data = alv, fill = '#b3d9ff', color = NA)\n\n")
+cat("→ Inget överlapp! ✓\n\n")
+
+
+
+
+
+
+
+# =============================================================================
+# SKAPA CLIPPADE DESO/REGSO-LAGER FÖR GÖTEBORGSREGIONEN
+# =============================================================================
+#
+# Skapar clippade DeSO/RegSO-lager för GR:s 13 kommuner där:
+# - DeSO/RegSO clippas mot landareal (kommungränser minus vatten)
+# - Vatten = älv + hav längs kusten
+# - Snygg visualisering utan överlapp
+#
+# =============================================================================
+
+library(sf)
+library(dplyr)
+
+source("R/geodata.R")
+
+# =============================================================================
+# STEG 1: DEFINIERA GR-KOMMUNER
+# =============================================================================
+
+message("\n=== DEFINERAR GÖTEBORGSREGIONEN ===\n")
+
+GR_KOMMUNER <- c(
+  "1440",  # Ale
+  "1489",  # Alingsås
+  "1480",  # Göteborg
+  "1401",  # Härryda
+  "1384",  # Kungsbacka
+  "1482",  # Kungälv
+  "1441",  # Lerum
+  "1462",  # Lilla Edet
+  "1481",  # Mölndal
+  "1402",  # Partille
+  "1415",  # Stenungsund
+  "1419",  # Tjörn
+  "1407"   # Öckerö
+)
+
+message("✓ 13 kommuner definierade")
+
+# =============================================================================
+# STEG 2: LADDA GRUNDLAGER
+# =============================================================================
+
+message("\n=== LADDAR GRUNDLAGER ===\n")
+
+# DeSO och RegSO för GR (oklippta)
+deso_gr_orig <- load_prepared_map("sverige/deso_gr")
+regso_gr_orig <- load_prepared_map("sverige/regso_gr")
+
+message("✓ DeSO GR: ", nrow(deso_gr_orig), " områden")
+message("✓ RegSO GR: ", nrow(regso_gr_orig), " områden")
+
+# Kommuner (för att skapa kommungräns)
+kommuner_sve <- load_prepared_map("sverige/kommuner")
+
+# Filtrera till GR-kommuner
+kommuner_gr <- kommuner_sve |>
+  filter(kommun_kod %in% GR_KOMMUNER)
+
+message("✓ Kommuner GR: ", nrow(kommuner_gr), " kommuner")
+
+# Slå samman till en GR-gräns
+gr_grans <- st_union(kommuner_gr)
+
+message("✓ GR-gräns (sammanslagna kommuner)")
+
+# =============================================================================
+# STEG 3: SKAPA VATTENLAGER FÖR GR
+# =============================================================================
+
+message("\n=== SKAPAR VATTENLAGER FÖR GR ===\n")
+
+# ALTERNATIV 1: Använd Göteborgs vatten och utöka
+# Detta är enklast om du redan har älv och hav för Göteborg
+
+alv_gbg <- load_water_layer("goteborg/alv_goteborg")
+hav_gbg <- load_water_layer("goteborg/hav_goteborg")
+
+if (!is.null(alv_gbg) && !is.null(hav_gbg)) {
+  
+  message("  Använder Göteborgs vattenlager")
+  
+  # Transformera till samma CRS
+  target_crs <- st_crs(gr_grans)
+  alv_gbg <- st_transform(alv_gbg, target_crs)
+  hav_gbg <- st_transform(hav_gbg, target_crs)
+  
+  # Clippa vatten mot GR-gräns (för att bara få relevant vatten)
+  # VARFÖR clippa?: Vi vill bara ha vatten inom/nära GR, inte hela havet
+  
+  # Buffra GR-gräns lite för att fånga kustvatten
+  gr_grans_buffrad <- st_buffer(gr_grans, dist = 5000)  # 5 km buffert
+  
+  alv_gr <- st_intersection(alv_gbg, gr_grans_buffrad)
+  hav_gr <- st_intersection(hav_gbg, gr_grans_buffrad)
+  
+  # Slå samman älv och hav
+  vatten_gr <- st_union(alv_gr, hav_gr)
+  
+  message("✓ Vattenlager för GR (älv + hav)")
+  
+  # Spara vattenlager för GR (för framtida användning)
+  dir.create("input/prepared_maps/sverige", showWarnings = FALSE, recursive = TRUE)
+  
+  saveRDS(alv_gr, "input/prepared_maps/sverige/alv_gr.rds")
+  saveRDS(hav_gr, "input/prepared_maps/sverige/hav_gr.rds")
+  saveRDS(vatten_gr, "input/prepared_maps/sverige/vatten_gr.rds")
+  
+  message("  → Sparade: input/prepared_maps/sverige/alv_gr.rds")
+  message("  → Sparade: input/prepared_maps/sverige/hav_gr.rds")
+  message("  → Sparade: input/prepared_maps/sverige/vatten_gr.rds")
+  
+} else {
+  
+  message("  ⚠ Göteborgs vattenlager saknas")
+  message("  → Skapar GR-lager utan vattenclipping")
+  message("  → Kör detta script igen efter att ha skapat Göteborgs vattenlager")
+  
+  vatten_gr <- NULL
+  
+}
+
+# =============================================================================
+# STEG 4: SKAPA LANDAREAL
+# =============================================================================
+
+if (!is.null(vatten_gr)) {
+  
+  message("\n=== SKAPAR LANDAREAL (GR minus vatten) ===\n")
+  
+  # Säkerställ samma CRS
+  vatten_gr <- st_transform(vatten_gr, st_crs(gr_grans))
+  
+  # Skapa landareal
+  landareal_gr <- st_difference(gr_grans, vatten_gr)
+  
+  message("✓ Landareal för GR")
+  
+  # Beräkna hur mycket vatten som togs bort
+  area_gr <- as.numeric(st_area(gr_grans)) / 1e6  # km²
+  area_land <- as.numeric(st_area(landareal_gr)) / 1e6  # km²
+  area_vatten <- area_gr - area_land
+  
+  cat("  Total area GR: ", round(area_gr, 2), " km²\n")
+  cat("  Landareal:     ", round(area_land, 2), " km²\n")
+  cat("  Vatten:        ", round(area_vatten, 2), " km²\n")
+  
+} else {
+  
+  message("\n⚠ Hoppar över vattenclipping (vattenlager saknas)\n")
+  landareal_gr <- gr_grans
+  
+}
+
+# =============================================================================
+# STEG 5: CLIPPA DESO MOT LANDAREAL
+# =============================================================================
+
+message("\n=== CLIPPAR DESO GR MOT LANDAREAL ===\n")
+
+# Säkerställ samma CRS
+deso_gr_orig <- st_transform(deso_gr_orig, st_crs(landareal_gr))
+
+# Clippa
+deso_gr_clipped <- st_intersection(deso_gr_orig, landareal_gr)
+
+# Städa kolumner
+deso_gr_clipped <- deso_gr_clipped |>
+  select(-starts_with("geometry.")) |>
+  select(-ends_with(".1"))
+
+message("✓ Clippade DeSO GR")
+message("  Före: ", nrow(deso_gr_orig), " områden")
+message("  Efter: ", nrow(deso_gr_clipped), " områden")
+
+if (nrow(deso_gr_clipped) < nrow(deso_gr_orig)) {
+  n_lost <- nrow(deso_gr_orig) - nrow(deso_gr_clipped)
+  message("  ", n_lost, " DeSO försvann (låg i vatten)")
+}
+
+# =============================================================================
+# STEG 6: CLIPPA REGSO MOT LANDAREAL
+# =============================================================================
+
+message("\n=== CLIPPAR REGSO GR MOT LANDAREAL ===\n")
+
+# Säkerställ samma CRS
+regso_gr_orig <- st_transform(regso_gr_orig, st_crs(landareal_gr))
+
+# Clippa
+regso_gr_clipped <- st_intersection(regso_gr_orig, landareal_gr)
+
+# Städa
+regso_gr_clipped <- regso_gr_clipped |>
+  select(-starts_with("geometry.")) |>
+  select(-ends_with(".1"))
+
+message("✓ Clippade RegSO GR")
+message("  Före: ", nrow(regso_gr_orig), " områden")
+message("  Efter: ", nrow(regso_gr_clipped), " områden")
+
+# =============================================================================
+# STEG 7: SPARA CLIPPADE LAGER
+# =============================================================================
+
+message("\n=== SPARAR CLIPPADE LAGER ===\n")
+
+# Backup av original
+if (!dir.exists("input/prepared_maps/sverige/backup")) {
+  dir.create("input/prepared_maps/sverige/backup", recursive = TRUE)
+}
+
+file.copy(
+  "input/prepared_maps/sverige/deso_gr.rds",
+  "input/prepared_maps/sverige/backup/deso_gr_original.rds",
+  overwrite = TRUE
+)
+
+file.copy(
+  "input/prepared_maps/sverige/regso_gr.rds",
+  "input/prepared_maps/sverige/backup/regso_gr_original.rds",
+  overwrite = TRUE
+)
+
+message("✓ Backup av original")
+
+# Spara clippade versioner
+saveRDS(deso_gr_clipped, "input/prepared_maps/sverige/deso_gr.rds")
+saveRDS(regso_gr_clipped, "input/prepared_maps/sverige/regso_gr.rds")
+
+message("✓ Sparade clippade versioner")
+message("  input/prepared_maps/sverige/deso_gr.rds")
+message("  input/prepared_maps/sverige/regso_gr.rds")
+
+# =============================================================================
+# STEG 8: JÄMFÖRELSE FÖRE/EFTER
+# =============================================================================
+
+if (!is.null(vatten_gr)) {
+  
+  message("\n=== JÄMFÖRELSE FÖRE/EFTER ===\n")
+  
+  # Beräkna arealskillnad
+  area_deso_orig <- sum(st_area(deso_gr_orig))
+  area_deso_clipped <- sum(st_area(deso_gr_clipped))
+  area_diff_deso <- as.numeric(area_deso_orig - area_deso_clipped) / 1e6
+  
+  area_regso_orig <- sum(st_area(regso_gr_orig))
+  area_regso_clipped <- sum(st_area(regso_gr_clipped))
+  area_diff_regso <- as.numeric(area_regso_orig - area_regso_clipped) / 1e6
+  
+  cat("DeSO GR:\n")
+  cat("  Original area: ", round(as.numeric(area_deso_orig) / 1e6, 2), " km²\n")
+  cat("  Clipped area:  ", round(as.numeric(area_deso_clipped) / 1e6, 2), " km²\n")
+  cat("  Bortklippt:    ", round(area_diff_deso, 2), " km² (vatten)\n\n")
+  
+  cat("RegSO GR:\n")
+  cat("  Original area: ", round(as.numeric(area_regso_orig) / 1e6, 2), " km²\n")
+  cat("  Clipped area:  ", round(as.numeric(area_regso_clipped) / 1e6, 2), " km²\n")
+  cat("  Bortklippt:    ", round(area_diff_regso, 2), " km² (vatten)\n\n")
+  
+}
+
+# =============================================================================
+# STEG 9: SKAPA JÄMFÖRELSEKARTOR
+# =============================================================================
+
+if (!is.null(vatten_gr)) {
+  
+  message("=== SKAPAR JÄMFÖRELSEKARTOR ===\n")
+  
+  library(ggplot2)
+  
+  dir.create("output/maps", showWarnings = FALSE, recursive = TRUE)
+  
+  # FÖRE: DeSO original + vatten
+  p_fore <- ggplot() +
+    geom_sf(data = deso_gr_orig, fill = "#a6d9cc", color = "white", linewidth = 0.02) +
+    geom_sf(data = vatten_gr, fill = "#b3d9ff", color = NA) +
+    labs(
+      title = "FÖRE: DeSO GR sticker ut över vatten",
+      subtitle = "Oklippt DeSO-lager"
+    ) +
+    theme_void()
+  
+  # EFTER: DeSO clipped + vatten
+  p_efter <- ggplot() +
+    geom_sf(data = kommuner_gr, fill = "#a6d9cc", color = "white", linewidth = 0.02) +
+    geom_sf(data = deso_gr_clipped, fill = NA, color = "black", linewidth = 0.1) +
+    geom_sf(data = vatten_gr, fill = "#b3d9ff", color = NA) +
+    labs(
+      title = "EFTER: DeSO GR clippat mot landareal",
+      subtitle = "Clippat DeSO-lager"
+    ) +
+    theme_void()
+  
+  # Spara jämförelse
+  library(patchwork)
+  p_jamfor <- p_fore / p_efter
+  
+  ggsave(
+    "output/maps/deso_gr_clippa_jamforelse.png",
+    p_jamfor,
+    width = 12,
+    height = 14,
+    dpi = 150
+  )
+  
+  message("✓ Jämförelsekarta: output/maps/deso_gr_clippa_jamforelse.png")
+  
+}
+
+message("\n✓ KLART! DeSO och RegSO för GR är nu clippade.\n")
+
+# =============================================================================
+# ANVÄNDNING
+# =============================================================================
+
+cat("\nNu kan du använda:\n\n")
+cat("deso_gr <- load_prepared_map('sverige/deso_gr')\n")
+cat("vatten_gr <- load_water_layer('sverige/vatten_gr')\n\n")
+cat("ggplot() +\n")
+cat("  geom_sf(data = deso_gr, aes(fill = varde)) +\n")
+cat("  geom_sf(data = vatten_gr, fill = '#b3d9ff', color = NA)\n\n")
+cat("→ Perfekt passform utan överlapp! ✓\n\n")
+
+# =============================================================================
+# HJÄLPFUNKTION: load_water_layer för GR
+# =============================================================================
+
+cat("TIPS: Lägg till i R/geodata.R:\n\n")
+cat("# GR-vatten\n")
+cat("alv_gr <- load_water_layer('sverige/alv_gr')\n")
+cat("hav_gr <- load_water_layer('sverige/hav_gr')\n")
+cat("vatten_gr <- load_water_layer('sverige/vatten_gr')  # Kombinerat\n\n")
+
+
+
+
+
+
+
+
+
+
+
+
+# =============================================================================
+# ALTERNATIV METOD: SKAPA HAVSLAGER MANUELLT
+# =============================================================================
+#
+# Om OpenStreetMap inte ger bra resultat kan vi skapa ett havslager manuellt
+# genom att definiera en rektangel väster om GR som representerar havet.
+#
+# FÖRDELAR:
+# - Enkel och snabb
+# - Full kontroll över storlek
+# - Inga externa beroenden
+#
+# NACKDELAR:
+# - Mindre exakt än OSM
+# - Inkluderar öar som "hav"
+#
+# =============================================================================
+
+library(sf)
+library(dplyr)
+
+source("R/geodata.R")
+
+# =============================================================================
+# METOD 1: BUFFERT VÄSTER OM GR
+# =============================================================================
+
+message("\n=== METOD 1: BUFFERT VÄSTER OM GR ===\n")
+
+# Ladda GR-kommuner
+GR_KOMMUNER <- c(
+  "1440", "1489", "1480", "1401", "1384", "1482",
+  "1441", "1462", "1481", "1402", "1415", "1419", "1407"
+)
+
+kommuner_sve <- load_prepared_map("sverige/kommuner")
+kommuner_gr <- kommuner_sve |> filter(kommun_kod %in% GR_KOMMUNER)
+gr_grans <- st_union(kommuner_gr)
+
+# Skapa bbox för GR
+gr_bbox <- st_bbox(gr_grans)
+
+# Skapa havs-rektangel väster om GR
+# STRATEGI: Ta västra gränsen och utöka 30 km västerut
+hav_xmin <- gr_bbox["xmin"] - 30000  # 30 km väster om GR
+hav_xmax <- gr_bbox["xmin"]          # Västra GR-gränsen
+hav_ymin <- gr_bbox["ymin"] - 10000  # 10 km söder om GR
+hav_ymax <- gr_bbox["ymax"] + 10000  # 10 km norr om GR
+
+# RÄTT: Skapa polygon direkt från koordinater
+# VARFÖR?: st_as_sfc(st_bbox()) kan ge NA-problem
+hav_polygon <- st_polygon(list(matrix(
+  c(hav_xmin, hav_ymin,
+    hav_xmax, hav_ymin,
+    hav_xmax, hav_ymax,
+    hav_xmin, hav_ymax,
+    hav_xmin, hav_ymin),  # Stäng polygon
+  ncol = 2, byrow = TRUE
+)))
+
+# Konvertera till sfc och sätt CRS
+hav_polygon <- st_sfc(hav_polygon, crs = st_crs(gr_grans))
+
+message("✓ Skapat havs-rektangel väster om GR")
+cat("  Bredd: ", (hav_xmax - hav_xmin) / 1000, " km\n")
+cat("  Höjd: ", (hav_ymax - hav_ymin) / 1000, " km\n")
+
+# Ta bort land från havet
+# VARFÖR?: Vi vill bara ha havet, inte öar och kust
+hav_minus_land <- st_difference(hav_polygon, gr_grans)
+
+# Spara
+saveRDS(hav_minus_land, "input/prepared_maps/sverige/hav_gr_manual.rds")
+message("✓ Sparat: input/prepared_maps/sverige/hav_gr_manual.rds")
+
+# =============================================================================
+# METOD 2: BUFFERT RUNT KUSTKOMMUNER
+# =============================================================================
+
+message("\n=== METOD 2: BUFFERT RUNT KUSTKOMMUNER ===\n")
+
+# Identifiera kustkommuner i GR
+KUSTKOMMUNER <- c(
+  "1480",  # Göteborg
+  "1384",  # Kungsbacka
+  "1482",  # Kungälv
+  "1415",  # Stenungsund
+  "1419",  # Tjörn
+  "1407"   # Öckerö
+)
+
+kustkommuner <- kommuner_sve |> filter(kommun_kod %in% KUSTKOMMUNER)
+
+# Buffra kustkommunerna västerut (havet)
+# STRATEGI: Stor buffert västerut fångar havet
+kust_buffrad <- st_buffer(st_union(kustkommuner), dist = 20000)  # 20 km
+
+# Ta bort land
+hav_kust <- st_difference(kust_buffrad, gr_grans)
+
+# Spara
+saveRDS(hav_kust, "input/prepared_maps/sverige/hav_gr_kust.rds")
+message("✓ Sparat: input/prepared_maps/sverige/hav_gr_kust.rds")
+
+# =============================================================================
+# METOD 3: KOMBINATION (BÄST!)
+# =============================================================================
+
+message("\n=== METOD 3: KOMBINATION AV METOD 1 & 2 ===\n")
+
+# Slå samman båda metoderna
+hav_kombinerat <- st_union(hav_minus_land, hav_kust)
+
+# Förenkla geometri (snabbare rendering)
+hav_kombinerat <- st_simplify(hav_kombinerat, dTolerance = 100)
+
+# Spara
+saveRDS(hav_kombinerat, "input/prepared_maps/sverige/hav_gr.rds")
+message("✓ Sparat: input/prepared_maps/sverige/hav_gr.rds")
+
+# =============================================================================
+# VISUALISERA ALLA METODER
+# =============================================================================
+
+message("\n=== JÄMFÖR METODER ===\n")
+
+library(ggplot2)
+library(patchwork)
+
+# Metod 1
+p1 <- ggplot() +
+  geom_sf(data = kommuner_gr, fill = "lightgray") +
+  geom_sf(data = hav_minus_land, fill = "#b3d9ff", alpha = 0.5) +
+  labs(title = "Metod 1: Rektangel väster om GR") +
+  theme_void()
+
+# Metod 2
+p2 <- ggplot() +
+  geom_sf(data = kommuner_gr, fill = "lightgray") +
+  geom_sf(data = hav_kust, fill = "#b3d9ff", alpha = 0.5) +
+  labs(title = "Metod 2: Buffert runt kustkommuner") +
+  theme_void()
+
+# Metod 3 (kombinerat)
+p3 <- ggplot() +
+  geom_sf(data = kommuner_gr, fill = "lightgray") +
+  geom_sf(data = hav_kombinerat, fill = "#b3d9ff", alpha = 0.5) +
+  labs(title = "Metod 3: Kombinerat (REKOMMENDERAT)") +
+  theme_void()
+
+# Spara jämförelse
+p_jamfor <- (p1 / p2 / p3)
+
+dir.create("output/maps", showWarnings = FALSE, recursive = TRUE)
+
+ggsave(
+  "output/maps/hav_gr_metoder_jamforelse.png",
+  p_jamfor,
+  width = 10,
+  height = 14,
+  dpi = 150
+)
+
+message("✓ Jämförelse: output/maps/hav_gr_metoder_jamforelse.png")
+
+# =============================================================================
+# TEST MED DESO
+# =============================================================================
+
+message("\n=== TEST MED DESO ===\n")
+
+deso_gr <- load_prepared_map("sverige/deso_gr")
+
+p_test <- ggplot() +
+  geom_sf(data = deso_gr, fill = "#d9d9d9", color = "white", linewidth = 0.02) +
+  geom_sf(data = hav_kombinerat, fill = "#b3d9ff", color = NA, alpha = 0.7) +
+  labs(
+    title = "DeSO GR med manuellt havslager",
+    subtitle = "Metod 3: Kombinerat"
+  ) +
+  theme_void()
+
+ggsave(
+  "output/maps/deso_gr_hav_manual_test.png",
+  p_test,
+  width = 10,
+  height = 12,
+  dpi = 150
+)
+
+message("✓ Test: output/maps/deso_gr_hav_manual_test.png")
+
+# =============================================================================
+# KLART!
+# =============================================================================
+
+message("\n✓ KLART! Manuellt havslager skapat\n")
+
+cat("Tre vattenlager skapade:\n")
+cat("1. hav_gr_manual.rds - Rektangel väster om GR\n")
+cat("2. hav_gr_kust.rds - Buffert runt kustkommuner\n")
+cat("3. hav_gr.rds - KOMBINERAT (rekommenderat)\n\n")
+
+cat("Använd:\n")
+cat("hav_gr <- load_water_layer('sverige/hav_gr')\n\n")
+
+cat("TIPS för justering:\n")
+cat("- Ändra hav_xmin = gr_bbox['xmin'] - 30000 till större/mindre\n")
+cat("- Ändra buffert: st_buffer(dist = 20000) till större/mindre\n")
+cat("- Lägg till/ta bort kustkommuner i KUSTKOMMUNER\n\n")
+
+
+
+
+
+# =============================================================================
+# SKAPA HAVS/KUSTLAGER FÖR GÖTEBORGSREGIONEN FRÅN OPENSTREETMAP
+# =============================================================================
+#
+# Hämtar vatten (hav, älvar, sjöar) från OpenStreetMap för GR-området.
+# Detta ger oss ett komplett vattenlager som täcker västkusten och älvar.
+#
+# FÖRDELAR med OpenStreetMap:
+# - Gratis och öppet
+# - Bra kvalitet
+# - Uppdaterat
+# - Enkelt att hämta
+#
+# =============================================================================
+
+library(sf)
+library(dplyr)
+library(osmdata)  # install.packages("osmdata") om du inte har det
+
+source("R/geodata.R")
+
+# =============================================================================
+# STEG 1: DEFINIERA GR OCH SKAPA BUFFRAD BBOX
+# =============================================================================
+
+message("\n=== DEFINIERAR GÖTEBORGSREGIONEN ===\n")
+
+GR_KOMMUNER <- c(
+  "1440",  # Ale
+  "1489",  # Alingsås
+  "1480",  # Göteborg
+  "1401",  # Härryda
+  "1384",  # Kungsbacka
+  "1482",  # Kungälv
+  "1441",  # Lerum
+  "1462",  # Lilla Edet
+  "1481",  # Mölndal
+  "1402",  # Partille
+  "1415",  # Stenungsund
+  "1419",  # Tjörn
+  "1407"   # Öckerö
+)
+
+# Ladda kommuner
+kommuner_sve <- load_prepared_map("sverige/kommuner")
+kommuner_gr <- kommuner_sve |>
+  filter(kommun_kod %in% GR_KOMMUNER)
+
+# Slå samman till GR-gräns
+gr_grans <- st_union(kommuner_gr)
+
+message("✓ GR-gräns (13 kommuner sammanslagna)")
+
+# Buffra för att fånga kustvatten och öar
+# VARFÖR stor buffert (15 km)?: För att fånga havsområdet väster om GR
+gr_grans_buffrad <- st_buffer(gr_grans, dist = 15000)  # 15 km buffert
+
+message("✓ Buffrad GR-gräns (15 km)")
+
+# Skapa bounding box för OSM-sökning
+# VARFÖR bbox?: OSM kräver geografiskt område att söka i
+gr_bbox <- st_bbox(gr_grans_buffrad)
+
+message("✓ Bounding box för OSM-sökning")
+cat("  xmin:", gr_bbox["xmin"], "\n")
+cat("  xmax:", gr_bbox["xmax"], "\n")
+cat("  ymin:", gr_bbox["ymin"], "\n")
+cat("  ymax:", gr_bbox["ymax"], "\n")
+
+# =============================================================================
+# STEG 2: HÄMTA VATTEN FRÅN OPENSTREETMAP
+# =============================================================================
+
+message("\n=== HÄMTAR VATTEN FRÅN OPENSTREETMAP ===\n")
+
+# OSM kräver WGS84 (EPSG:4326) för bounding box
+gr_bbox_wgs84 <- st_bbox(st_transform(gr_grans_buffrad, 4326))
+
+message("  Detta kan ta 1-2 minuter...")
+
+# VATTEN (polygoner): Hav, sjöar, älvmynningar
+# VARFÖR "natural=water"?: OSM:s standard för vattenpolygoner
+tryCatch({
+  
+  vatten_osm <- opq(bbox = gr_bbox_wgs84) |>
+    add_osm_feature(key = "natural", value = "water") |>
+    osmdata_sf()
+  
+  # Extrahera polygoner (vattenområden)
+  vatten_polygoner <- vatten_osm$osm_polygons
+  
+  if (is.null(vatten_polygoner) || nrow(vatten_polygoner) == 0) {
+    stop("Inga vattenpolygoner hittades från OSM")
+  }
+  
+  message("✓ Hämtade ", nrow(vatten_polygoner), " vattenpolygoner från OSM")
+  
+}, error = function(e) {
+  stop("Kunde inte hämta data från OpenStreetMap: ", e$message)
+})
+
+# ÄLVAR OCH VATTENDRAG (linjer)
+# VARFÖR också linjer?: Älvar är ofta linjer i OSM
+tryCatch({
+  
+  alvar_osm <- opq(bbox = gr_bbox_wgs84) |>
+    add_osm_feature(key = "waterway", value = c("river", "stream")) |>
+    osmdata_sf()
+  
+  alvar_linjer <- alvar_osm$osm_lines
+  
+  if (!is.null(alvar_linjer) && nrow(alvar_linjer) > 0) {
+    message("✓ Hämtade ", nrow(alvar_linjer), " älvar/vattendrag från OSM")
+  } else {
+    message("  Inga älvar/vattendrag hittades")
+    alvar_linjer <- NULL
+  }
+  
+}, error = function(e) {
+  message("  Kunde inte hämta älvar: ", e$message)
+  alvar_linjer <- NULL
+})
+
+# =============================================================================
+# STEG 3: BEARBETA OCH RENSA VATTEN
+# =============================================================================
+
+message("\n=== BEARBETAR VATTEN ===\n")
+
+# Transformera till SWEREF99 TM (3006)
+vatten_polygoner <- st_transform(vatten_polygoner, 3006)
+
+if (!is.null(alvar_linjer)) {
+  alvar_linjer <- st_transform(alvar_linjer, 3006)
+  
+  # Buffra älvar till polygoner (10 meter bredd)
+  # VARFÖR buffra?: Älvar är linjer, vi vill ha polygoner för visualisering
+  alvar_polygoner <- st_buffer(alvar_linjer, dist = 10)
+  
+  message("  Buffrade älvar till polygoner (10m bredd)")
+} else {
+  alvar_polygoner <- NULL
+}
+
+# Slå samman vatten och älvar
+if (!is.null(alvar_polygoner)) {
+  vatten_alla <- rbind(
+    vatten_polygoner |> select(osm_id, name, geometry),
+    alvar_polygoner |> select(osm_id, name, geometry)
+  )
+  message("✓ Kombinerade vatten och älvar")
+} else {
+  vatten_alla <- vatten_polygoner |> select(osm_id, name, geometry)
+}
+
+# Slå samman alla till ett lager
+# VARFÖR st_union?: Skapar ett sammanhängande vattenlager
+vatten_union <- st_union(vatten_alla)
+
+message("✓ Slog samman allt vatten till ett lager")
+
+# Clippa mot buffrad GR-gräns
+# VARFÖR clippa?: Vi vill bara ha vatten inom/nära GR
+vatten_gr <- st_intersection(vatten_union, gr_grans_buffrad)
+
+message("✓ Clippade vatten mot GR-område")
+
+# =============================================================================
+# STEG 4: SEPARERA HAV OCH ÄLV (VALFRITT)
+# =============================================================================
+
+message("\n=== SEPARERAR HAV OCH ÄLV ===\n")
+
+# HAV: Stora vattenområden (>1 km²)
+# ÄLV/SJÖAR: Mindre vattenområden (<1 km²)
+
+# För att separera behöver vi disaggregera unionen
+vatten_separerade <- st_cast(vatten_gr, "POLYGON")
+
+# Beräkna area för varje del
+areas <- st_area(vatten_separerade)
+
+# FIXA UNITS: Konvertera till numerisk och jämför
+# VARFÖR?: st_area() ger units-objekt (m²), måste konvertera för jämförelse
+areas_numeric <- as.numeric(areas)
+
+# HAV = stora polygoner (>1 km² = 1 000 000 m²)
+hav_gr <- vatten_separerade[areas_numeric > 1e6]
+hav_gr <- st_union(hav_gr)  # Slå samman alla havsbitar
+
+# ÄLV/SJÖAR = små polygoner (<1 km²)
+alv_gr <- vatten_separerade[areas_numeric <= 1e6]
+alv_gr <- st_union(alv_gr)  # Slå samman alla älvbitar
+
+message("✓ Separerade hav (>1 km²) och älv/sjöar (<1 km²)")
+cat("  Hav area: ", round(as.numeric(st_area(hav_gr)) / 1e6, 2), " km²\n")
+cat("  Älv area: ", round(as.numeric(st_area(alv_gr)) / 1e6, 2), " km²\n")
+
+# =============================================================================
+# STEG 5: SPARA VATTENLAGER
+# =============================================================================
+
+message("\n=== SPARAR VATTENLAGER ===\n")
+
+dir.create("input/prepared_maps/sverige", showWarnings = FALSE, recursive = TRUE)
+
+# Spara separata lager
+saveRDS(hav_gr, "input/prepared_maps/sverige/hav_gr.rds")
+saveRDS(alv_gr, "input/prepared_maps/sverige/alv_gr.rds")
+saveRDS(vatten_gr, "input/prepared_maps/sverige/vatten_gr.rds")
+
+message("✓ Sparade vattenlager:")
+message("  → input/prepared_maps/sverige/hav_gr.rds")
+message("  → input/prepared_maps/sverige/alv_gr.rds")
+message("  → input/prepared_maps/sverige/vatten_gr.rds")
+
+# =============================================================================
+# STEG 6: VISUALISERA
+# =============================================================================
+
+message("\n=== SKAPAR FÖRHANDSVISNING ===\n")
+
+library(ggplot2)
+
+# Enkel förhandsvisning
+p_vatten <- ggplot() +
+  geom_sf(data = kommuner_gr, fill = "lightgray", color = "white") +
+  geom_sf(data = hav_gr, fill = "#b3d9ff", color = NA, alpha = 0.7) +
+  geom_sf(data = alv_gr, fill = "#0099cc", color = NA, alpha = 0.9) +
+  labs(
+    title = "Vattenlager för Göteborgsregionen (från OpenStreetMap)",
+    subtitle = "Hav (ljusblått) + Älvar/sjöar (mörkblått)"
+  ) +
+  theme_void()
+
+# Spara
+dir.create("output/maps", showWarnings = FALSE, recursive = TRUE)
+
+ggsave(
+  "output/maps/vatten_gr_preview.png",
+  p_vatten,
+  width = 10,
+  height = 12,
+  dpi = 150
+)
+
+message("✓ Preview: output/maps/vatten_gr_preview.png")
+
+# =============================================================================
+# STEG 7: ANVÄND MED DESO/REGSO
+# =============================================================================
+
+message("\n=== EXEMPEL: ANVÄND MED DESO ===\n")
+
+# Testa med DeSO
+deso_gr <- load_prepared_map("sverige/deso_gr")
+
+p_test <- ggplot() +
+  geom_sf(data = deso_gr, fill = "#d9d9d9", color = "black", linewidth = 0.05) +
+  geom_sf(data = hav_gr, fill = "#b3d9ff", color = NA) +
+  geom_sf(data = alv_gr, fill = "#0099cc", color = NA) +
+  labs(
+    title = "Test: DeSO GR med vattenlager",
+    subtitle = "Kontrollera att överlapp inte finns"
+  ) +
+  theme_void()
+
+ggsave(
+  "output/maps/deso_gr_med_vatten_test.png",
+  p_test,
+  width = 10,
+  height = 12,
+  dpi = 150
+)
+
+message("✓ Test-karta: output/maps/deso_gr_med_vatten_test.png")
+
+# =============================================================================
+# KLART!
+# =============================================================================
+
+message("\n✓ KLART! Vattenlager för GR skapat från OpenStreetMap\n")
+
+cat("Använd nu:\n\n")
+cat("hav_gr <- load_water_layer('sverige/hav_gr')\n")
+cat("alv_gr <- load_water_layer('sverige/alv_gr')\n")
+cat("vatten_gr <- load_water_layer('sverige/vatten_gr')  # Kombinerat\n\n")
+
+cat("Exempel:\n\n")
+cat("ggplot() +\n")
+cat("  geom_sf(data = deso_gr, aes(fill = varde)) +\n")
+cat("  geom_sf(data = hav_gr, fill = '#b3d9ff', color = NA) +\n")
+cat("  geom_sf(data = alv_gr, fill = '#0099cc', color = NA)\n\n")
+
+# =============================================================================
+# TIPS FÖR JUSTERING
+# =============================================================================
+
+cat("\nTIPS:\n")
+cat("- Justera buffert: Ändra dist = 15000 till större/mindre värde\n")
+cat("- Justera hav/älv-gräns: Ändra areas > 1e6 till annat värde\n")
+cat("- Älvbredd: Ändra st_buffer(dist = 10) till bredare/smalare\n\n")
+
+
+
+
+
+goteb
+
+
+
+ggplot() +
+  geom_sf(data = deso_alla |> filter(kommunkod %in% GR_KOMMUNER), fill = "lightgray", color = "black") +
+  geom_sf(data = kommuner_gr, fill = "lightgray", color = "white") +
+  geom_sf(data = kommungrans, fill = NA, color = gbg_colors("dark_yellow"), alpha = 0.7) +
+
+  labs(
+    title = "Vattenlager för Göteborgsregionen (från OpenStreetMap)",
+    subtitle = "Hav (ljusblått) + Älvar/sjöar (mörkblått)"
+  ) +
+  theme_void()

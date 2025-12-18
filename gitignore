@@ -1,0 +1,20 @@
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Output (genereras av kod)
+output/
+
+# Temporärt
+*.tmp
+*.log
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# RStudio
+*.Rproj

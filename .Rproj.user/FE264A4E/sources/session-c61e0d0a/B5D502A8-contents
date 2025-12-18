@@ -1,0 +1,164 @@
+# =============================================================================
+# BEFOLKNINGSFÖRÄNDRING HITTILLS I ÅR - BASOMRÅDEN
+# =============================================================================
+# Detta skript skapar en divergerande choropleth-karta som visar
+# befolkningsförändringen från januari till vald månad på basområdesnivå
+# 
+# PARAMETRAR: Ändra bara dessa för att uppdatera till ny månad/år
+# OBS OM ÅR START OCH ÅR SLUT INTE ÄR 1 jan- xx samma år blir rubrik fel nu
+# =============================================================================
+
+# Ladda setup och funktioner
+source("R/00_setup.R")
+
+library(tidyverse)
+library(pxweb)
+
+
+# =============================================================================
+# PARAMETRAR - ÄNDRA HÄR FÖR NY MÅNAD/ÅR
+# =============================================================================
+
+# Vilket år och vilken månad vill du visa?
+AR_START <- 2024
+AR_SLUT <- 2025
+MANAD_START <- "December"  # Första januari = december föregående år
+MANAD_SLUT <- "Oktober"    # Senaste tillgängliga månad
+
+
+
+
+
+
+# =============================================================================
+# 1. HÄMTA DATA FRÅN GÖTEBORGS STATISTIKDATABAS
+# =============================================================================
+
+url_address <- "http://statistikdatabas.goteborg.se/api/v1/sv/1. Göteborg och dess delområden/Basområden/Befolkning/Folkmängd/30_Manadsfolkm_BO.px"
+
+basdata <- pxweb_get(
+  url = url_address,
+  query = list(
+    Område = c("*"),
+    Månad = c(MANAD_START, MANAD_SLUT),
+    År = c(as.character(AR_START), as.character(AR_SLUT))
+  )
+)
+
+# Skapa kolumnnamn dynamiskt
+col_start <- paste0(MANAD_START, "_", AR_START)
+col_slut <- paste0(MANAD_SLUT, "_", AR_SLUT)
+
+# Bearbeta data
+df_wide <- as.data.frame(basdata) |>
+  pivot_wider(names_from = Månad, values_from = NoContent) |>
+  pivot_wider(names_from = År, values_from = all_of(c(MANAD_START, MANAD_SLUT)))
+
+# Byt namn på kolumner
+names(df_wide)[names(df_wide) == col_start] <- "period_start"
+names(df_wide)[names(df_wide) == col_slut] <- "period_slut"
+
+# Beräkna förändring
+df <- df_wide |>
+  select(Område, period_start, period_slut) |>
+  mutate(
+    utv_i_ar = period_slut - period_start,
+    utv_procent = (utv_i_ar / period_start) * 100
+  ) |> 
+  rename(omrade_kod = Område)
+
+message("✓ Data hämtad för ", nrow(df), " basområden")
+message("  Total förändring: ", sum(df$utv_i_ar, na.rm = TRUE), " personer")
+
+# =============================================================================
+# 2. LADDA GEODATA OCH KOPPLA DATA
+# =============================================================================
+
+# Basområden
+basomraden_sf <- load_prepared_map("goteborg/basomraden")
+
+# Koppla data till basområden
+basomraden_sf <- join_stat_to_map(basomraden_sf, df, "omrade_kod")
+
+
+primaromraden_sf <- basomraden_sf |>
+  group_by(primaromrade_namn) |>
+  summarise(
+    utv_i_ar = sum(utv_i_ar, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# Aggregera till stadsområden för etiketter
+stadsomraden_label <- basomraden_sf |>
+  group_by(stadsomrade_kod) |>
+  summarise(
+    utv_stadsomraden = sum(utv_i_ar, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+# =============================================================================
+# 3. LADDA VATTENLAGER
+# =============================================================================
+
+gota_alv <- load_water_layer("goteborg/alv_goteborg")
+
+
+# =============================================================================
+# 4. SKAPA KLASSINDELNING OCH FÄRGER
+# =============================================================================
+
+# Klassindelning (ändra vid behov)
+BREAKS <- c(-Inf, -100, -50, -10, 10, 50, 100, Inf)
+LABELS <- c("< -100", "-100", "-50", "-10 till 10", "50", "100", "> 100")
+basomraden_sf$klass <- apply_classification(basomraden_sf$utv_i_ar, BREAKS, LABELS)
+primaromraden_sf$klass <- apply_classification(primaromraden_sf$utv_i_ar, BREAKS, LABELS)
+# scale_fill_gbg_diverging("red_green", n = 5)
+
+# =============================================================================
+# 5. SKAPA KARTA
+# =============================================================================
+
+
+# Skapa mellanområdesgränser (innergränser)
+#mellan_borders <- mellanomraden_sf |> ms_innerlines()
+
+# Dynamiska titlar
+titel_manad_start <- ifelse(
+  MANAD_START == "December", 
+  "jan",
+  paste0("1 ", tolower(substr(MANAD_START, 1, 3)))
+)
+titel_manad_slut <- paste0(tolower(substr(MANAD_SLUT, 1, 3)))
+
+# Skapa legend-text
+legend_titel <- paste0(
+  "Befolkningsförändring ", titel_manad_start, 
+  "-", titel_manad_slut, " år ", AR_SLUT
+)
+
+ggplot(primaromraden_sf, aes(fill = klass)) + #basomraden_sf |> filter(!is.na(klass))
+  geom_sf(color = "black", linewidth = 0.1) +
+  scale_fill_gbg_diverging("red_green", n = 7) +
+  labs(
+    title = "",
+    fill = legend_titel,
+    caption = "Källa: SCB"
+  ) +
+  theme_gothenburg_map()
+
+
+create_interactive_map(
+  map_data = basomraden_sf,
+  value_col = "utv_i_ar",
+  classify_method = "fisher",
+  n_classes = 7,
+  palette_type = "diverging",
+  palette_name = "red_green",
+  title = "Befolkningsförändring",
+  legend_title = "Förändring",
+  caption = "Källa: SCB"
+)
+
+
