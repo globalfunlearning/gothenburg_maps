@@ -47,14 +47,10 @@ cat("  GOTHENBURG_MAPS - Laddar funktioner...\n")
 cat("=============================================================================\n")
 cat("Projekt-root: ", project_root, "\n\n")
 
-# Spara nuvarande working directory
-old_wd <- getwd()
-
-# Byt till projektets root för att ladda filer
-setwd(project_root)
-
-# Se till att återställa working directory när vi är klara
-on.exit(setwd(old_wd), add = TRUE)
+# Sätt global variabel för var kartlagren finns
+# VARFÖR?: load_prepared_map() använder detta för att hitta kartlager när den körs från andra projekt
+options(gothenburg_maps_root = project_root)
+message("✓ Satt gothenburg_maps_root = ", project_root, "\n")
 
 # Lista över filer att ladda (i rätt ordning)
 files_to_load <- c(
@@ -68,13 +64,14 @@ files_to_load <- c(
   "R/export.R"            # Export
 )
 
-# Ladda varje fil
+# Ladda varje fil med fullständig sökväg
 for (file in files_to_load) {
-  if (file.exists(file)) {
-    source(file, encoding = "UTF-8")
+  full_path <- file.path(project_root, file)
+  if (file.exists(full_path)) {
+    source(full_path, encoding = "UTF-8")
     cat("✓", basename(file), "\n")
   } else {
-    warning("Kunde inte hitta: ", file)
+    warning("Kunde inte hitta: ", full_path)
   }
 }
 
@@ -157,5 +154,4 @@ if (dir.exists(prepared_maps_dir)) {
   }
 }
 
-cat("Redo att skapa kartor! 🗺️\n")
-cat("Working directory återställd till: ", getwd(), "\n\n")
+cat("Redo att skapa kartor! 🗺️\n\n")

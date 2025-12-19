@@ -23,6 +23,8 @@ library(dplyr)
 #' Läser in ett förberett kartlager i rds-format. Mycket snabbare än att
 #' läsa shapefiler varje gång.
 #'
+#' NYTT: Stöd för att köra från andra projekt via gothenburg_maps_root option
+#'
 #' @param map_name Namn på kartlagret (inklusive mapp, utan .rds-suffix)
 #' @param data_dir Mapp där förberedda kartlager finns (default: "input/prepared_maps")
 #'
@@ -48,13 +50,19 @@ load_prepared_map <- function(map_name,
     stop("map_name måste vara en textsträng, t.ex. 'goteborg/primaromraden'")
   }
   
-  # Bygg filsökväg
-  file_path <- file.path(data_dir, paste0(map_name, ".rds"))
+  # NYTT: Använd gothenburg_maps_root om den finns (satt av 00_setup.R)
+  # VARFÖR?: När funktionen körs från andra projekt behöver vi veta var kartlagren finns
+  maps_root <- getOption("gothenburg_maps_root", default = ".")
+  
+  # Bygg filsökväg relativt till maps_root
+  file_path <- file.path(maps_root, data_dir, paste0(map_name, ".rds"))
   
   # Kontrollera att filen finns
   if (!file.exists(file_path)) {
+    # Hjälpsam felmeddelande med söksökväg
     stop(
       "Kartlager finns inte: ", file_path, "\n",
+      "Sökte i: ", file.path(maps_root, data_dir), "\n",
       "Tillgängliga kartlager:\n",
       paste("  -", list_prepared_maps(data_dir)$map_name, collapse = "\n")
     )
@@ -97,24 +105,28 @@ load_prepared_map <- function(map_name,
 list_prepared_maps <- function(data_dir = "input/prepared_maps",
                                pattern = "\\.rds$") {
   
+  # NYTT: Använd gothenburg_maps_root
+  maps_root <- getOption("gothenburg_maps_root", default = ".")
+  full_data_dir <- file.path(maps_root, data_dir)
+  
   # Hitta alla rds-filer rekursivt
   # VARFÖR recursive?: Vi har nu undermappar (goteborg/, sverige/)
   files <- list.files(
-    data_dir,
+    full_data_dir,
     pattern = pattern,
     full.names = TRUE,
     recursive = TRUE
   )
   
   if (length(files) == 0) {
-    message("Inga förberedda kartlager finns i: ", data_dir)
+    message("Inga förberedda kartlager finns i: ", full_data_dir)
     message("Skapa förberedda kartlager genom att använda load_geo_layer()")
     return(invisible(NULL))
   }
   
   # Samla information om varje fil
   # Skapa map_name relativt till data_dir (inkluderar undermapp)
-  rel_paths <- sub(paste0(data_dir, "/"), "", files)
+  rel_paths <- sub(paste0(full_data_dir, "/"), "", files)
   map_names <- tools::file_path_sans_ext(rel_paths)
   
   map_info <- data.frame(
@@ -563,6 +575,8 @@ load_deso_regso_koppling <- function() {
 #' Läser in förberedda vattenlager (älvar, sjöar, hav) för visualisering.
 #' Vatten renderas ofta annorlunda än övrig geografi, därför egen funktion.
 #'
+#' NYTT: Stöd för att köra från andra projekt via gothenburg_maps_root option
+#'
 #' @param water_name Namn på vattenlagret (inklusive mapp, utan .rds-suffix)
 #' @param data_dir Mapp där förberedda vattenlager finns (default: "input/prepared_maps")
 #'
@@ -588,11 +602,16 @@ load_water_layer <- function(water_name,
   # VARFÖR egen funktion?: Tydliggör att det är vatten, kan lägga till
   # vattenspecifik funktionalitet senare (t.ex. automatisk styling)
   
-  file_path <- file.path(data_dir, paste0(water_name, ".rds"))
+  # NYTT: Använd gothenburg_maps_root
+  maps_root <- getOption("gothenburg_maps_root", default = ".")
+  
+  # Bygg filsökväg
+  file_path <- file.path(maps_root, data_dir, paste0(water_name, ".rds"))
   
   if (!file.exists(file_path)) {
     warning(
       "Vattenlager finns inte: ", file_path, "\n",
+      "Sökte i: ", file.path(maps_root, data_dir), "\n",
       "Tillgängliga lager:\n",
       paste("  -", list_prepared_maps(data_dir)$map_name, collapse = "\n")
     )
